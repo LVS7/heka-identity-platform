@@ -1,0 +1,51 @@
+{
+  "name": "trust-lens-demo",
+  "version": "0.1.0",
+  "description": "Trust Lens demo: VC-attested discovery (ARD / AI Catalog) + A2A OID4VP In-Task Auth, built on Heka Identity Platform.",
+  "scripts": {
+    "postinstall": "node scripts/patch-esm-exports.mjs",
+    "web": "tsx src/web/server.ts",
+    "agent": "tsx src/agent/index.ts",
+    "ard-adapter": "tsx src/ard-adapter/index.ts",
+    "console": "tsx src/console/server.ts",
+    "sites": "tsx src/sites.ts",
+    "seed": "tsx src/seed.ts",
+    "derisk": "tsx src/scripts/derisk-revocation.ts",
+    "derisk:holder": "tsx src/scripts/derisk-holder.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "verify:live": "tsx src/scripts/verify-live.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "as": "tsx src/mcp/auth-server.ts"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@a2a-js/sdk": "^0.3.10",
+    "@credo-ts/askar": "0.7.0",
+    "@credo-ts/core": "0.7.0",
+    "@credo-ts/didcomm": "0.7.0",
+    "@credo-ts/hedera": "0.7.0",
+    "@credo-ts/node": "0.7.0",
+    "@credo-ts/openid4vc": "0.7.0",
+    "@genkit-ai/compat-oai": "^1.28.0",
+    "@modelcontextprotocol/sdk": "^1.22.0",
+    "@openwallet-foundation/askar-nodejs": "0.6.0",
+    "@openwallet-foundation/askar-shared": "0.6.0",
+    "axios": "^1.13.5",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "genkit": "^1.28.0",
+    "jose": "^6.1.0",
+    "selfsigned": "^3.0.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
+  },
+  "packageManager": "yarn@4.16.0"
+}

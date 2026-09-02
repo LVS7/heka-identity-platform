@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trust Lens</title>
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <h1>Trust Lens</h1>
+        <p class="subtitle">Discovery is a phone book. Credentials are what vouch.</p>
+      </div>
+      <nav>
+        <button class="tab active" data-view="discovery">Discovery</button>
+        <button class="tab" data-view="mcp">MCP tools</button>
+        <button class="tab" data-view="audit">Audit</button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="discovery" class="view active">
+        <form id="search-form">
+          <input id="query" type="search" value="Acme invoice" aria-label="Search resources" />
+          <button type="submit">Search</button>
+          <button type="button" id="verify-all" disabled>Verify all</button>
+        </form>
+
+        <p id="score-note" class="note"></p>
+
+        <div id="results" class="cards"></div>
+        <p id="empty" class="empty">Search the registry to discover published resources.</p>
+      </section>
+
+      <section id="task" class="view">
+        <button id="task-back" class="tab">&larr; Back to discovery</button>
+        <h2 id="task-title"></h2>
+        <p class="note" id="task-context"></p>
+
+        <ol id="task-events" class="timeline"></ol>
+
+        <div id="auth-panel" class="auth-panel" hidden>
+          <h3>Authorization required</h3>
+          <p class="note">
+            The agent has paused. It needs a Finance Data Officer credential presented over OID4VP
+            before it will prepare the payment export — role and organisation only, nothing else.
+          </p>
+          <div class="auth-row">
+            <img id="auth-qr" alt="OID4VP request QR code" />
+            <div>
+              <p class="note">Scan with Heka Wallet, or:</p>
+              <button id="simulate">Simulate presentation (demo)</button>
+              <p class="note" id="simulate-note"></p>
+            </div>
+          </div>
+        </div>
+
+        <pre id="task-result" class="result" hidden></pre>
+      </section>
+
+      <section id="mcp" class="view">
+        <h2>Acme Invoice Data — MCP tools</h2>
+        <p class="note">
+          The same credential, a second protocol. Routine data flows freely; the sensitive tool
+          demands a scope, and the scope is only granted against a verified presentation.
+          <span id="token-status" class="badge"></span>
+        </p>
+
+        <div id="tools" class="cards"></div>
+
+        <div id="mcp-auth" class="auth-panel" hidden>
+          <h3 id="mcp-auth-title">Authorization required</h3>
+          <p class="note" id="mcp-auth-message"></p>
+          <div class="auth-row">
+            <img id="mcp-qr" alt="OID4VP request QR code" />
+            <div>
+              <p class="note">Scan with Heka Wallet, or:</p>
+              <button id="mcp-simulate">Simulate presentation (demo)</button>
+              <p class="note" id="mcp-auth-note"></p>
+            </div>
+          </div>
+        </div>
+
+        <pre id="mcp-result" class="result" hidden></pre>
+      </section>
+
+      <section id="audit" class="view">
+        <h2>Trust decisions</h2>
+        <p class="note">Every verification, refusal and revocation, with the evidence behind it.</p>
+        <ol id="audit-list" class="timeline"></ol>
+      </section>
+    </main>
+
+    <div id="backdrop" class="backdrop" hidden></div>
+
+    <aside id="drawer" class="drawer" hidden>
+      <button id="drawer-close" class="close" aria-label="Close">&times;</button>
+      <h2 id="drawer-title"></h2>
+      <p id="drawer-verdict"></p>
+      <div id="drawer-body"></div>
+    </aside>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

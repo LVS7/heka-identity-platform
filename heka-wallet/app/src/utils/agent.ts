@@ -287,12 +287,12 @@ export async function ensureExampleCredentialCreated(agent: Agent): Promise<void
 
   const holderDidCreateResult = await agent.dids.create({
     method: 'key',
-    options: { keyId: holderPublicKey },
+    options: { keyId: holderPublicKey.keyId },
   })
 
   if (!holderDidCreateResult.didState.didDocument) {
     throw new Error(
-      `Failed to create holder DID for example credential: ${JSON.stringify(issuerDidCreateResult, null, 2)}`
+      `Failed to create holder DID for example credential: ${JSON.stringify(holderDidCreateResult, null, 2)}`
     )
   }
 

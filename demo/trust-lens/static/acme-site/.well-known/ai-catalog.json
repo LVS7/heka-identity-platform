@@ -1,0 +1,68 @@
+{
+  "specVersion": "1.0",
+  "host": "acme-invoices.example",
+  "entries": [
+    {
+      "identifier": "urn:air:acme-invoices.example:finance:invoice-agent",
+      "displayName": "Acme Invoice Agent",
+      "type": "application/a2a-agent-card+json",
+      "url": "https://acme-invoices.example/.well-known/agent-card.json",
+      "description": "Autonomous supplier invoice reconciliation and payment preparation.",
+      "tags": [
+        "finance",
+        "invoices",
+        "a2a"
+      ],
+      "capabilities": [
+        "invoice-reconciliation",
+        "payment-preparation"
+      ],
+      "representativeQueries": [
+        "reconcile supplier invoices",
+        "prepare a payment export"
+      ],
+      "trustManifest": {
+        "identity": "did:hedera:testnet:2E35AApFHaZYqMT3LEGURtQ4pwWtTWVBgcD48ohgGKc2_0.0.10156404",
+        "identityType": "did",
+        "attestations": [
+          {
+            "type": "application/vc+sd-jwt",
+            "uri": "https://acme-invoices.example/.well-known/attestations/agent-passport.sd-jwt",
+            "digest": "sha256-h8OcJGeCQzu2yc9NPDz7izANvoVOspr7d1C4bUL3gPs="
+          }
+        ]
+      }
+    },
+    {
+      "identifier": "urn:air:acme-invoices.example:finance:invoice-data",
+      "displayName": "Acme Invoice Data",
+      "type": "application/mcp-server-card+json",
+      "url": "https://acme-invoices.example/.well-known/mcp-server-card.json",
+      "description": "Supplier invoice intake, validation and reconciliation data via MCP.",
+      "tags": [
+        "finance",
+        "invoices",
+        "mcp"
+      ],
+      "capabilities": [
+        "invoice-data",
+        "supplier-data"
+      ],
+      "representativeQueries": [
+        "look up a supplier invoice",
+        "supplier bank details"
+      ],
+      "trustManifest": {
+        "identity": "did:hedera:testnet:AQpiYpGDo5s9W71gjvm2QVDp5FuEPhEfbDVYJGhkLERw_0.0.10156407",
+        "identityType": "did",
+        "attestations": [
+          {
+            "type": "application/vc+sd-jwt",
+            "uri": "https://acme-invoices.example/.well-known/attestations/mcp-passport.sd-jwt",
+            "digest": "sha256-e3tR5DeDOlrlJUYtowKcKSpGQbWTUllRH9LkxFY1lGM="
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "Acme Invoice Data",
+  "description": "Supplier invoice intake, validation and reconciliation data via MCP.",
+  "version": "1.0.0",
+  "provider": {
+    "organization": "Acme Corp GmbH",
+    "url": "https://acme-invoices.example"
+  },
+  "transport": {
+    "type": "streamable-http",
+    "url": "https://acme-invoices.example/mcp"
+  },
+  "tools": [
+    {
+      "name": "invoices-list",
+      "description": "List supplier invoices for a period."
+    },
+    {
+      "name": "suppliers-export-bank-details",
+      "description": "Export supplier bank details. Sensitive: requires an elevated scope."
+    }
+  ]
+}

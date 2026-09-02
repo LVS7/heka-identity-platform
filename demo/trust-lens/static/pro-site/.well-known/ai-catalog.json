@@ -1,0 +1,37 @@
+{
+  "specVersion": "1.0",
+  "host": "acme-invoices-ai.example",
+  "entries": [
+    {
+      "identifier": "urn:air:acme-invoices-ai.example:finance:invoice-agent",
+      "displayName": "AcmeInvoice Pro Agent",
+      "type": "application/a2a-agent-card+json",
+      "url": "https://acme-invoices-ai.example/.well-known/agent-card.json",
+      "description": "Autonomous supplier invoice reconciliation and payment preparation.",
+      "tags": [
+        "finance",
+        "invoices",
+        "a2a"
+      ],
+      "capabilities": [
+        "invoice-reconciliation",
+        "payment-preparation"
+      ],
+      "representativeQueries": [
+        "reconcile supplier invoices",
+        "prepare a payment export"
+      ],
+      "trustManifest": {
+        "identity": "did:hedera:testnet:A9uYmfvtpVxurUWnErD7oQSi1Vvj239w6wA9GiSkeTV8_0.0.10156408",
+        "identityType": "did",
+        "attestations": [
+          {
+            "type": "application/vc+sd-jwt",
+            "uri": "https://acme-invoices-ai.example/.well-known/attestations/agent-passport.sd-jwt",
+            "digest": "sha256-fnOOnUBQs/4iqovr/60l4T/0S5AWHg7o2jvti//0EKA="
+          }
+        ]
+      }
+    }
+  ]
+}

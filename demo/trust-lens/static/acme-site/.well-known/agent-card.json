@@ -1,0 +1,57 @@
+{
+  "name": "Acme Invoice Agent",
+  "description": "Autonomous supplier invoice reconciliation and payment preparation.",
+  "url": "http://localhost:10003/",
+  "provider": {
+    "organization": "Acme Corp GmbH",
+    "url": "https://acme-invoices.example"
+  },
+  "version": "1.0.0",
+  "protocolVersion": "1.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "stateTransitionHistory": false,
+    "extensions": [
+      {
+        "uri": "https://github.com/DSRCorporation/a2a-oid4vp-in-task-auth-extension/tree/main/v1",
+        "description": "Requires an OpenID for Verifiable Presentations (OID4VP) authorization for sensitive task steps",
+        "required": false,
+        "params": {
+          "oid4vpVersions": [
+            "1.0"
+          ]
+        }
+      }
+    ]
+  },
+  "defaultInputModes": [
+    "text"
+  ],
+  "defaultOutputModes": [
+    "text"
+  ],
+  "skills": [
+    {
+      "id": "invoice-reconciliation",
+      "name": "Supplier invoice reconciliation",
+      "description": "Reconciles supplier invoices and prepares a payment export.",
+      "tags": [
+        "finance",
+        "invoices",
+        "a2a"
+      ],
+      "examples": [
+        "reconcile supplier invoices",
+        "prepare a payment export"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text"
+      ]
+    }
+  ],
+  "supportsAuthenticatedExtendedCard": false
+}
