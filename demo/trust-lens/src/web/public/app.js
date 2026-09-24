@@ -1,13 +1,70 @@
-/* Trust Lens UI. Deliberately dependency-free: the interesting part is the trust model. */
+/* Trust Lens UI. Deliberately dependency-free (one vendored QR encoder): the interesting part is the trust model. */
 
-const state = { results: [], verdicts: new Map() }
+const state = { results: [], verdicts: new Map(), wallet: { linked: false } }
 
 const el = (id) => document.getElementById(id)
 const escapeHtml = (value) =>
-  String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+  String(value ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+  )
 
 const VERDICT_CLASS = { VERIFIED: 'ok' }
 const badgeClass = (verdict) => VERDICT_CLASS[verdict] ?? (verdict ? 'bad' : '')
+const isAgent = (result) => result.type.includes('a2a')
+
+// ---------- operator's wallet ----------
+
+async function loadWallet() {
+  const response = await fetch('/api/wallet')
+  state.wallet = response.ok ? await response.json() : { linked: false }
+  renderWallet()
+}
+
+function renderWallet() {
+  const { linked, holderDid, source } = state.wallet
+  const chip = el('wallet-chip')
+  chip.className = `badge ${linked ? 'ok' : ''}`
+  chip.textContent = linked ? `wallet: linked · ${holderDid.slice(0, 22)}…` : 'wallet: not linked'
+  chip.title = linked ? `${holderDid}${source === 'env' ? ' (from HOLDER_PUBLIC_DID)' : ''}` : ''
+  el('wallet-did').hidden = linked
+  el('wallet-link').hidden = linked
+  el('wallet-unlink').hidden = !linked
+  // The send buttons depend on the link; re-render whichever panel is open.
+  renderSendButton('task')
+  renderSendButton('mcp')
+}
+
+async function linkWallet() {
+  const holderDid = el('wallet-did').value.trim()
+  el('wallet-error').textContent = ''
+  el('wallet-link').disabled = true
+  el('wallet-link').textContent = 'Linking…'
+
+  try {
+    const response = await fetch('/api/wallet/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ holderDid }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      el('wallet-error').textContent = data.error
+      return
+    }
+    state.wallet = data
+    renderWallet()
+  } finally {
+    el('wallet-link').disabled = false
+    el('wallet-link').textContent = 'Link wallet'
+  }
+}
+
+async function unlinkWallet() {
+  const response = await fetch('/api/wallet/link', { method: 'DELETE' })
+  state.wallet = response.ok ? await response.json() : { linked: false }
+  renderWallet()
+}
 
 // ---------- discovery ----------
 
@@ -43,7 +100,7 @@ function render() {
            ${engageable ? '' : '<span class="refusal">refused: not verified</span>'}`
         : ''
 
-      const kind = result.type.includes('a2a') ? 'A2A agent' : 'MCP server'
+      const kind = isAgent(result) ? 'A2A agent' : 'MCP server'
 
       return `
         <article class="card ${verdict && !engageable ? 'refused' : ''}">
@@ -125,7 +182,8 @@ function openDrawer(identifier) {
   const evidence = verdict.evidence ?? {}
 
   el('drawer-title').textContent = result.displayName
-  el('drawer-verdict').innerHTML = `<span class="badge ${badgeClass(verdict.verdict)}">${escapeHtml(verdict.verdict)}</span>`
+  el('drawer-verdict').innerHTML =
+    `<span class="badge ${badgeClass(verdict.verdict)}">${escapeHtml(verdict.verdict)}</span>`
 
   const checks = CHECKS.map(([key, label]) => {
     const value = checkState(key, evidence, verdict.verdict)
@@ -159,12 +217,117 @@ function setDrawerOpen(open) {
   el('backdrop').hidden = !open
 }
 
+// ---------- authorization panel (shared by the task view and the MCP view) ----------
+
+// `panel` is 'task' or 'mcp'; element ids are `${panel}-send`, `${panel}-qr`, and so on.
+const auth = {
+  task: { request: null, delivery: null },
+  mcp: { request: null, delivery: null },
+}
+
+function renderQr(target, text) {
+  const qr = qrcode(0, 'M')
+  qr.addData(text)
+  qr.make()
+  target.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true })
+}
+
+function renderSendButton(panel) {
+  const button = el(`${panel}-send`)
+  if (!button) return
+  const { linked } = state.wallet
+  const { delivery } = auth[panel]
+  button.disabled = !linked
+  button.textContent = delivery ? 'Resend to wallet' : 'Send to wallet'
+  button.title = linked ? '' : 'Link the wallet first — paste its Public DID in the header'
+}
+
+function renderDelivery(panel) {
+  const { delivery } = auth[panel]
+  const target = el(`${panel}-delivery`)
+  if (!delivery) {
+    target.className = 'delivery'
+    target.textContent = state.wallet.linked
+      ? ''
+      : 'No wallet linked — paste its Public DID in the header, or use the other ways below.'
+    return
+  }
+  const at = new Date(delivery.at).toLocaleTimeString()
+  target.className = `delivery ${delivery.state}`
+  target.textContent =
+    delivery.state === 'sent'
+      ? `Sent ${at} · waiting for Share in Heka Wallet…`
+      : `Delivery failed ${at}: ${delivery.error}`
+}
+
+function showAuthPanel(panel, request, delivery) {
+  const changed = auth[panel].request !== request
+  auth[panel].request = request
+  auth[panel].delivery = delivery ?? (changed ? null : auth[panel].delivery)
+
+  if (changed) {
+    renderQr(el(`${panel}-qr`), request)
+    el(`${panel}-uri`).textContent = request
+    el(`${panel}-simulate-note`).textContent = ''
+  }
+  renderSendButton(panel)
+  renderDelivery(panel)
+  el(`${panel}-auth`).hidden = false
+}
+
+function hideAuthPanel(panel) {
+  auth[panel] = { request: null, delivery: null }
+  el(`${panel}-auth`).hidden = true
+}
+
+async function sendToWallet(panel) {
+  const button = el(`${panel}-send`)
+  button.disabled = true
+  button.textContent = 'Sending…'
+
+  try {
+    const url = panel === 'task' ? `/api/task/${state.taskId}/send-to-wallet` : '/api/mcp/send-to-wallet'
+    const response = await fetch(url, { method: 'POST' })
+    const data = await response.json()
+    auth[panel].delivery = data.delivery ?? { state: 'failed', at: new Date().toISOString(), error: data.error }
+    renderDelivery(panel)
+  } finally {
+    renderSendButton(panel)
+  }
+}
+
+async function copyUri(sourceId) {
+  const text = el(sourceId).textContent
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // Clipboard access can be refused on http origins; the text is selectable either way.
+  }
+}
+
 // ---------- agent task ----------
 
 let taskPoll = null
 
 async function engage(identifier) {
+  const result = state.results.find((r) => r.identifier === identifier)
   const verdict = state.verdicts.get(identifier)
+
+  // An MCP server is not engaged with a task: its tools are on the MCP tab. Going there is the
+  // engagement, and the verdict travels along so the tab can say what was verified.
+  if (result && !isAgent(result)) {
+    if (verdict?.verdict !== 'VERIFIED') {
+      alert('refused: not verified')
+      return
+    }
+    el('mcp-engaged').hidden = false
+    el('mcp-engaged').textContent =
+      `${result.displayName} — VERIFIED at discovery (${result.publisher}). Verified is not the same as unlocked: the sensitive tool below still demands a scope.`
+    showView('mcp')
+    loadTools()
+    return
+  }
+
   const response = await fetch('/api/engage', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -177,13 +340,12 @@ async function engage(identifier) {
     return
   }
 
-  const result = state.results.find((r) => r.identifier === identifier)
   el('task-title').textContent = result?.displayName ?? identifier
-  el('task-context').textContent = `VERIFIED · ${result?.publisher ?? ''} — asking it to reconcile May invoices and prepare the payment export`
+  el('task-context').textContent =
+    `VERIFIED · ${result?.publisher ?? ''} — asking it to reconcile May invoices and prepare the payment export`
   el('task-events').innerHTML = ''
   el('task-result').hidden = true
-  el('auth-panel').hidden = true
-  el('simulate-note').textContent = ''
+  hideAuthPanel('task')
 
   showView('task')
   watchTask(data.taskId)
@@ -207,11 +369,8 @@ function watchTask(taskId) {
       )
       .join('')
 
-    const waiting = Boolean(task.authorizationRequest)
-    el('auth-panel').hidden = !waiting
-    if (waiting) {
-      el('auth-qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(task.authorizationRequest)}`
-    }
+    if (task.authorizationRequest) showAuthPanel('task', task.authorizationRequest, task.delivery)
+    else hideAuthPanel('task')
 
     if (task.result || task.error) {
       el('task-result').hidden = false
@@ -225,14 +384,14 @@ function watchTask(taskId) {
 }
 
 async function simulatePresentation() {
-  const button = el('simulate')
+  const button = el('task-simulate')
   button.disabled = true
-  el('simulate-note').textContent = 'Presenting…'
+  el('task-simulate-note').textContent = 'Presenting…'
 
   try {
     const response = await fetch(`/api/task/${state.taskId}/simulate-presentation`, { method: 'POST' })
     const data = await response.json()
-    el('simulate-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
+    el('task-simulate-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
   } finally {
     button.disabled = false
   }
@@ -240,7 +399,9 @@ async function simulatePresentation() {
 
 function showView(name) {
   document.querySelectorAll('.view').forEach((view) => view.classList.toggle('active', view.id === name))
-  document.querySelectorAll('.tab[data-view]').forEach((tab) => tab.classList.toggle('active', tab.dataset.view === name))
+  document
+    .querySelectorAll('.tab[data-view]')
+    .forEach((tab) => tab.classList.toggle('active', tab.dataset.view === name))
 }
 
 // ---------- MCP tools ----------
@@ -290,7 +451,7 @@ function renderTokenStatus(token) {
 
 async function invokeTool(name) {
   el('mcp-result').hidden = true
-  el('mcp-auth').hidden = true
+  hideAuthPanel('mcp')
   clearInterval(authPoll)
 
   const response = await fetch('/api/mcp/call', {
@@ -304,17 +465,17 @@ async function invokeTool(name) {
     el('mcp-result').hidden = false
     const by = data.result?.authorizedBy
     el('mcp-result').textContent =
-      (by?.role ? `Authorized by ${by.role} · ${by.org}\n\n` : '') + JSON.stringify(data.result?.content ?? data.result, null, 2)
+      (by?.role ? `Authorized by ${by.role} · ${by.org}\n\n` : '') +
+      JSON.stringify(data.result?.content ?? data.result, null, 2)
     renderTokenStatus(data.token)
     return
   }
 
   if (data.authorization) {
-    el('mcp-auth').hidden = false
-    el('mcp-auth-title').textContent = `${data.status === 403 ? 'Insufficient scope' : 'Authorization required'} — ${data.requiredScope}`
+    el('mcp-auth-title').textContent =
+      `${data.status === 403 ? 'Insufficient scope' : 'Authorization required'} — ${data.requiredScope}`
     el('mcp-auth-message').textContent = data.authorization.message ?? ''
-    el('mcp-auth-note').textContent = ''
-    el('mcp-qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=360x360&data=${encodeURIComponent(data.authorization.request)}`
+    showAuthPanel('mcp', data.authorization.request, null)
     pollAuthorization(name)
     return
   }
@@ -331,15 +492,25 @@ function pollAuthorization(toolToRetry) {
 
     if (response.status === 403) {
       clearInterval(authPoll)
-      el('mcp-auth-note').textContent = data.error
+      el('mcp-simulate-note').textContent = data.error
+      auth.mcp.delivery = { state: 'failed', at: new Date().toISOString(), error: data.error }
+      renderDelivery('mcp')
       return
     }
 
     if (data.granted) {
       clearInterval(authPoll)
-      el('mcp-auth').hidden = true
+      hideAuthPanel('mcp')
       renderTokenStatus(data.token)
       invokeTool(toolToRetry) // step-up complete: retry the original call
+      return
+    }
+
+    // Keep the delivery line in step with what the server recorded (a resend from another tab, say).
+    if (data.delivery && data.delivery.at !== auth.mcp.delivery?.at) {
+      auth.mcp.delivery = data.delivery
+      renderDelivery('mcp')
+      renderSendButton('mcp')
     }
   }, 2000)
 }
@@ -347,12 +518,12 @@ function pollAuthorization(toolToRetry) {
 async function simulateMcpPresentation() {
   const button = el('mcp-simulate')
   button.disabled = true
-  el('mcp-auth-note').textContent = 'Presenting…'
+  el('mcp-simulate-note').textContent = 'Presenting…'
 
   try {
     const response = await fetch('/api/mcp/simulate-presentation', { method: 'POST' })
     const data = await response.json()
-    el('mcp-auth-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
+    el('mcp-simulate-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
   } finally {
     button.disabled = false
   }
@@ -408,7 +579,21 @@ el('results').addEventListener('click', (event) => {
   if (engageTarget && !engageTarget.disabled) engage(engageTarget.dataset.engage)
 })
 
-el('simulate').addEventListener('click', simulatePresentation)
+el('wallet-link').addEventListener('click', linkWallet)
+el('wallet-unlink').addEventListener('click', unlinkWallet)
+el('wallet-did').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') linkWallet()
+})
+
+document.addEventListener('click', (event) => {
+  const send = event.target.closest('[data-send]')
+  if (send && !send.disabled) sendToWallet(send.dataset.send)
+
+  const copy = event.target.closest('[data-copy]')
+  if (copy) copyUri(copy.dataset.copy)
+})
+
+el('task-simulate').addEventListener('click', simulatePresentation)
 el('task-back').addEventListener('click', () => {
   clearInterval(taskPoll)
   showView('discovery')
@@ -430,4 +615,5 @@ document.querySelectorAll('.tab[data-view]').forEach((tab) => {
   })
 })
 
+loadWallet()
 search(el('query').value)

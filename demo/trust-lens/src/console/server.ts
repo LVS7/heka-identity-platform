@@ -8,6 +8,10 @@
  * Everything here goes through the Identity Service's status-list API. The console holds no
  * state of its own — status is read live from the published status list, which is the same
  * document any relying party reads.
+ *
+ * It also does the one issuer-side act the scenario needs before it starts: handing the operator
+ * their Finance Data Officer credential. The offer is pushed to the wallet over DIDComm (see
+ * `src/shared/wallet-link.ts`), so an emulator without a camera can receive it.
  */
 
 import { resolve } from 'node:path'
@@ -16,13 +20,17 @@ import * as dotenv from 'dotenv'
 import express from 'express'
 
 import { isRevokedInStatusList } from '../core/status-list'
-import { loadState, SeedState } from '../seed/state'
+import { loadState, saveState, SeedState } from '../seed/state'
 import { DEMO_RESOURCES, OFFICER_CREDENTIAL, TRUSTCO } from '../shared/demo-config'
 import { identityServiceFromEnv, IdentityServiceClient } from '../shared/identity-service'
+import { createOfficerOffer } from '../shared/officer-offer'
+import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
+import { credoWalletTransport } from '../shared/wallet-link-credo'
 
 dotenv.config()
 
 const PORT = Number(process.env.TRUSTCO_CONSOLE_PORT ?? 4100)
+const DIDCOMM_PORT = Number(process.env.TRUSTCO_CONSOLE_DIDCOMM_PORT ?? 4110)
 
 type CredentialKey = 'officer' | 'acmeAgent' | 'acmeMcp' | 'pro'
 
@@ -78,10 +86,18 @@ function main() {
   if (!state.statusListId) throw new Error('no seed state — run `yarn seed` first')
 
   const identityService = identityServiceFromEnv()
+  // Same link file as the Trust Lens: the operator pastes their wallet DID once, on either UI.
+  const walletLink = new WalletLink({
+    stateFile: WALLET_LINK_FILE,
+    initialDid: process.env.HOLDER_PUBLIC_DID,
+    transport: () => credoWalletTransport({ label: 'trustco-console-wallet-link', inboundPort: DIDCOMM_PORT }),
+  })
 
   const app = express()
   app.use(express.json())
   app.use(express.static(resolve(process.cwd(), 'src/console/public')))
+  // The console reuses the Trust Lens stylesheet; a relative `../../` link cannot escape a static root.
+  app.use('/shared', express.static(resolve(process.cwd(), 'src/web/public')))
 
   app.get('/api/credentials', async (_req, res) => {
     try {
@@ -90,6 +106,46 @@ function main() {
         statusList: identityService.statusListUrl(state.statusListId as string),
         credentials: await readTiles(identityService, state),
       })
+    } catch (error) {
+      res.status(502).json({ error: (error as Error).message })
+    }
+  })
+
+  app.get('/api/wallet', (_req, res) => {
+    res.json(walletLink.status)
+  })
+
+  app.post('/api/wallet/link', async (req, res) => {
+    try {
+      res.json(await walletLink.link(String(req.body?.holderDid ?? '').trim()))
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message })
+    }
+  })
+
+  /**
+   * Issue the officer credential to the operator's wallet: mint a fresh offer (pre-authorized
+   * codes are single-use) and push it over DIDComm. The offer is returned too, for a phone with a
+   * camera or a wallet that is not linked.
+   */
+  app.post('/api/credentials/officer/offer', async (_req, res) => {
+    try {
+      const offer = await createOfficerOffer(identityService, state)
+      state.officerOffer = offer
+      saveState(state)
+
+      if (!walletLink.status.linked) {
+        res.json({ offer, delivered: false, note: 'no wallet linked — scan or deep-link the offer instead' })
+        return
+      }
+
+      try {
+        await walletLink.send(offer)
+        console.log('[console] officer credential offer delivered to the operator’s wallet')
+        res.json({ offer, delivered: true })
+      } catch (error) {
+        res.status(502).json({ offer, delivered: false, error: (error as Error).message })
+      }
     } catch (error) {
       res.status(502).json({ error: (error as Error).message })
     }

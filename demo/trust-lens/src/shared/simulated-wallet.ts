@@ -16,10 +16,10 @@
 
 import * as dotenv from 'dotenv'
 
-import { ROLE_CREDENTIAL_VCT } from '../core/types'
-import { OFFICER_CREDENTIAL, TRUSTCO } from './demo-config'
+import { OFFICER_CREDENTIAL } from './demo-config'
 import { claimCredentialOffer, createHolderAgent, HolderAgent, storeCredential } from './holder'
 import { IdentityServiceClient } from './identity-service'
+import { createOfficerOffer } from './officer-offer'
 import { loadState } from '../seed/state'
 
 dotenv.config()
@@ -47,23 +47,7 @@ export class SimulatedWallet {
     this.agent = createHolderAgent('trust-lens-simulated-wallet')
     await this.agent.initialize()
 
-    const { credentialOffer } = await this.identityService.createIssuanceOffer(state.issuerDid, [
-      {
-        format: 'vc+sd-jwt',
-        credentialSupportedId: OFFICER_CREDENTIAL.configurationId,
-        issuer: { method: 'did', did: state.issuerDid },
-        payload: {
-          vct: ROLE_CREDENTIAL_VCT,
-          role: OFFICER_CREDENTIAL.role,
-          org: TRUSTCO.legalName,
-          credentialStatus: {
-            statusListCredential: this.identityService.statusListUrl(state.statusListId),
-            statusListIndex: state.statusIndexes.officer,
-          },
-        },
-        disclosureFrame: { _sd: [...OFFICER_CREDENTIAL.disclosed] },
-      },
-    ])
+    const credentialOffer = await createOfficerOffer(this.identityService, state)
 
     const compact = await claimCredentialOffer(this.agent, credentialOffer)
     await storeCredential(this.agent, compact)

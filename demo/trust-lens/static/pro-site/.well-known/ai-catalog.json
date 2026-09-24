@@ -28,7 +28,7 @@
           {
             "type": "application/vc+sd-jwt",
             "uri": "https://acme-invoices-ai.example/.well-known/attestations/agent-passport.sd-jwt",
-            "digest": "sha256-fnOOnUBQs/4iqovr/60l4T/0S5AWHg7o2jvti//0EKA="
+            "digest": "sha256-446sdbC0QV3bZMFUYu5ROnpbPAoHQX62k0mUtEg/kUo="
           }
         ]
       }

@@ -19,11 +19,11 @@ curl -s "http://localhost:4000/api/discovery?q=Acme%20invoice"
 
 Expect **three** results across two publishers, scoring **93 / 93 / 91**:
 
-| Resource | Publisher |
-|---|---|
-| Acme Invoice Agent | acme-invoices.example |
+| Resource              | Publisher                |
+| --------------------- | ------------------------ |
+| Acme Invoice Agent    | acme-invoices.example    |
 | AcmeInvoice Pro Agent | acme-invoices-ai.example |
-| Acme Invoice Data | acme-invoices.example |
+| Acme Invoice Data     | acme-invoices.example    |
 
 The near-identical scores are the point, not a coincidence: relevance ranking cannot separate a
 genuine supplier from a lookalike. `scoreMeaning` in the response carries the ARD §7.2 wording.
@@ -61,11 +61,15 @@ curl -s -X POST http://localhost:4000/api/engage -H "content-type: application/j
 Poll `GET /api/task/<id>`. Expect `working` → `working` → **`auth-required`**, with
 `authorizationRequest` set.
 
-Present the credential — from a real wallet (see `wallet-flow`) or the in-process holder:
+Present the credential — from the real wallet, or the in-process holder:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/task/<id>/simulate-presentation
+curl -s -X POST http://localhost:4000/api/task/<id>/send-to-wallet          # DIDComm to the linked Heka Wallet; the person taps Share
+curl -s -X POST http://localhost:4000/api/task/<id>/simulate-presentation   # or: the in-process holder
 ```
+
+The first needs a linked wallet (`GET /api/wallet` → `linked: true`; see `wallet-flow`). Expect
+`delivery.state: "sent"`; the UI's **Send to wallet** button does the same.
 
 Then expect `working` → `completed` with the payment export, ending
 "Export authorized by a verified Finance Data Officer presentation."
@@ -91,7 +95,7 @@ curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application
 Expect `ok: false`, status `401`, `requiredScope: suppliers:export`, and an `authorization` block
 — the client has already walked RFC 9728 → RFC 8414 and started an authorization.
 
-Present (wallet or `POST /api/mcp/simulate-presentation`), then:
+Present (`POST /api/mcp/send-to-wallet` for the linked wallet, or `POST /api/mcp/simulate-presentation`), then:
 
 ```bash
 curl -s http://localhost:4000/api/mcp/authorization   # granted: true, TTL ~300s
@@ -100,7 +104,7 @@ curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application
 ```
 
 Expect bank details plus `authorizedBy: { role: "Finance Data Officer", org: "TrustCo …" }`. The
-resource server knows *who* authorized — while knowing nothing about verifiable credentials.
+resource server knows _who_ authorized — while knowing nothing about verifiable credentials.
 
 Worth pointing out when demonstrating: the AS log shows `aud=http://trustlens-mcp:4400` — the
 token is useless at any other resource (RFC 8707).
@@ -117,7 +121,7 @@ curl -s -X POST http://localhost:4100/api/credentials/officer/status \
 - Engage the agent again → presentation still submits fine, then
   `Authorization denied: the Finance Data Officer credential has been revoked by its issuer`
 - Ask for the sensitive tool again → **this still succeeds if a token was already minted.** That
-  is correct OAuth: revoking a credential stops the *next* grant, it does not reach back into a
+  is correct OAuth: revoking a credential stops the _next_ grant, it does not reach back into a
   live token. Drop the cached token first, then the call fails and the AS refuses:
 
   ```bash
@@ -148,7 +152,15 @@ curl -s http://localhost:4000/api/audit
 ```
 
 Every verification, refusal, authorization and denial, newest first, each with the evidence it
-rested on.
+rested on. Deliveries to the wallet appear as `authorization` entries — _delivered to the
+operator's wallet_ or _wallet delivery failed_ — because getting a request to a phone is a step,
+not a trust decision.
+
+## Engaging the MCP entry from Discovery
+
+Pressing **Engage** on the verified _Acme Invoice Data_ card does not start a task: an MCP server
+is engaged by calling its tools, so the UI switches to the MCP tools tab with a note naming what
+was verified. `POST /api/engage` is only for the agent.
 
 ## Leaving the stand clean
 

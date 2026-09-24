@@ -9,13 +9,13 @@ description: Use when bringing the Trust Lens demo stack up or down - starting H
 
 Starting everything is rarely required, and the full stack plus an emulator does not fit in 16 GB.
 
-| Working on | Needs |
-|---|---|
-| Discovery / verification | Heka, sites, web |
-| A2A path | + agent |
-| MCP path | + AS, MCP server |
-| Revocation | + console |
-| Registry integration | see `spec/ADR-002` — currently blocked upstream |
+| Working on               | Needs                                           |
+| ------------------------ | ----------------------------------------------- |
+| Discovery / verification | Heka, sites, web                                |
+| A2A path                 | + agent                                         |
+| MCP path                 | + AS, MCP server                                |
+| Revocation               | + console                                       |
+| Registry integration     | see `spec/ADR-002` — currently blocked upstream |
 
 ## Order
 
@@ -54,7 +54,10 @@ yarn seed --check  # is the state complete
 yarn seed --reset  # re-issue everything (minutes; writes to Hedera testnet)
 ```
 
-It prints a credential offer at the end — that is how the officer credential gets into a wallet.
+It prints a credential offer at the end. For a real wallet, prefer the Console's **Send offer to
+wallet** (a fresh offer over DIDComm) — see `wallet-flow`. To let a phone or emulator reach Heka
+without `adb reverse`, start Heka with `AGENT_OID4VCI_EP=http://<LAN-IP>:3003` (step 1 there);
+no re-seed is needed after changing it.
 
 ## 3. Services
 
@@ -96,7 +99,7 @@ sleep 2
 --network-alias acme-invoices.example --network-alias acme-invoices-ai.example
 ```
 
-**Agent** — the A2A client connects to the URL *in the agent card*, so it must be reachable:
+**Agent** — the A2A client connects to the URL _in the agent card_, so it must be reachable:
 
 ```
 --name trustlens-agent -p 10003:10003
@@ -124,11 +127,16 @@ sleep 2
 -e ACME_AGENT_URL=http://trustlens-agent:10003 -e MCP_PUBLIC_URL=http://trustlens-mcp:4400
 ```
 
-**Console**:
+**Console** (needs the bridge — it mints offers):
 
 ```
 --name trustlens-console -p 4100:4100 -e TRUSTCO_CONSOLE_PORT=4100
 ```
+
+**Wallet link ports.** The web and the console each open an inbound DIDComm transport
+(`TRUST_LENS_DIDCOMM_PORT=4010`, `TRUSTCO_CONSOLE_DIDCOMM_PORT=4110`). Delivery only needs
+outbound, so the ports need no `-p`; they just must not collide. The link itself lives in
+`.wallet-link.json` in the repo directory, so both containers see it through the mount.
 
 ## 4. Confirm it is actually up
 

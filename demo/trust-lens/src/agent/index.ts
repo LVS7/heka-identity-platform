@@ -124,18 +124,31 @@ class InvoiceAgentExecutor implements AgentExecutor {
 
   private verifierDid: string | null = null
 
-  public constructor(
-    private readonly identityService: IdentityServiceClient,
-    private readonly notifications: WebSocket
-  ) {}
+  public constructor(private readonly identityService: IdentityServiceClient) {}
 
   public async initialize(): Promise<void> {
     this.verifierDid = await this.identityService.prepareWallet()
     console.log(`[agent] verifier identity: ${this.verifierDid}`)
+    this.connectNotifications()
+  }
 
-    this.notifications.on('open', () => console.log('[agent] notification channel open'))
-    this.notifications.on('error', (error: Error) => console.log(`[agent] notification error: ${error.message}`))
-    this.notifications.on('message', (raw: Buffer) => this.onNotification(raw))
+  /**
+   * Heka pushes verification-session state changes over a WebSocket. The socket does not
+   * survive a restart of the Identity Service (re-creating its container to change the
+   * advertised OID4VC address is a documented step), so reconnect rather than go deaf — and
+   * `waitForVerifiedPresentation` also asks Heka directly, in case a state change fell into the gap.
+   */
+  private connectNotifications(): void {
+    const socket = new WebSocket(this.identityService.notificationsUrl(), {
+      headers: { Authorization: `Bearer ${process.env.IDENTITY_SERVICE_ACCESS_TOKEN}` },
+    })
+    socket.on('open', () => console.log('[agent] notification channel open'))
+    socket.on('error', (error: Error) => console.log(`[agent] notification error: ${error.message}`))
+    socket.on('message', (raw: Buffer) => this.onNotification(raw))
+    socket.on('close', (code: number) => {
+      console.log(`[agent] notification channel closed (${code}); reconnecting in 3s`)
+      setTimeout(() => this.connectNotifications(), 3000)
+    })
   }
 
   private onNotification(raw: Buffer): void {
@@ -224,7 +237,10 @@ class InvoiceAgentExecutor implements AgentExecutor {
     } catch (error) {
       const denied = error instanceof AuthorizationDenied
       console.log(`[agent] task ${taskId.slice(0, 8)} ${denied ? 'denied' : 'failed'}: ${(error as Error).message}`)
-      say('failed', denied ? `Authorization denied: ${(error as Error).message}` : `Agent error: ${(error as Error).message}`)
+      say(
+        'failed',
+        denied ? `Authorization denied: ${(error as Error).message}` : `Agent error: ${(error as Error).message}`
+      )
     }
   }
 
@@ -237,7 +253,9 @@ class InvoiceAgentExecutor implements AgentExecutor {
 
     const sessionId = response.verificationSession.id
     this.sessionToContext.set(sessionId, contextId)
-    console.log(`[agent] authorization requested: session ${sessionId.slice(0, 8)} for context ${contextId.slice(0, 8)}`)
+    console.log(
+      `[agent] authorization requested: session ${sessionId.slice(0, 8)} for context ${contextId.slice(0, 8)}`
+    )
 
     return {
       sessionId,
@@ -265,13 +283,30 @@ class InvoiceAgentExecutor implements AgentExecutor {
 
     return new Promise((resolve, reject) => {
       const started = Date.now()
-      const poll = setInterval(() => {
+      let ticks = 0
+      let checking = false
+      const poll = setInterval(async () => {
         if (this.verifiedSessions.has(sessionId)) {
           clearInterval(poll)
           resolve()
-        } else if (Date.now() - started > AUTHORIZATION_TIMEOUT_MS) {
+          return
+        }
+        if (Date.now() - started > AUTHORIZATION_TIMEOUT_MS) {
           clearInterval(poll)
           reject(new AuthorizationDenied('no presentation was received in time'))
+          return
+        }
+        // Belt and braces: every few seconds, ask Heka in case the notification never came.
+        if (++ticks % 6 === 0 && !checking) {
+          checking = true
+          try {
+            const session = await this.identityService.getVerificationSession(sessionId)
+            if (session.state === 'ResponseVerified') this.verifiedSessions.add(sessionId)
+          } catch {
+            // Transient; the next tick tries again and the timeout still bounds the wait.
+          } finally {
+            checking = false
+          }
         }
       }, 500)
     })
@@ -311,11 +346,8 @@ function collectText(context: RequestContext): string {
 
 async function main() {
   const identityService = identityServiceFromEnv()
-  const notifications = new WebSocket(identityService.notificationsUrl(), {
-    headers: { Authorization: `Bearer ${process.env.IDENTITY_SERVICE_ACCESS_TOKEN}` },
-  })
 
-  const executor = new InvoiceAgentExecutor(identityService, notifications)
+  const executor = new InvoiceAgentExecutor(identityService)
   await executor.initialize()
 
   const handler = new DefaultRequestHandler(agentCard(), new InMemoryTaskStore() as TaskStore, executor)

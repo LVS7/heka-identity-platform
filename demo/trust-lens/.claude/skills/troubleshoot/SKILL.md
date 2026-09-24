@@ -39,8 +39,32 @@ Anything already in a wallet is now stale — re-issue with a fresh offer.
 The OID4VP session expired before the presentation arrived. Heka does not expose
 `expirationInSeconds`, so the window cannot be widened.
 
-Create the request and deliver it in one step, and present immediately. Nothing is corrupted —
-just repeat. See `wallet-flow`.
+Have the wallet unlocked and in the foreground before **Send to wallet**, and tap Share at once.
+Nothing is corrupted — **Resend to wallet** or engage again. See `wallet-flow`.
+
+### `no wallet linked`
+
+`GET /api/wallet` says `linked: false`. Paste the wallet's `Public DID: did:peer:…` (React Native
+DevTools, or `adb logcat -d -s ReactNativeJS`) into the header of the Trust Lens or the Console. The link is `.wallet-link.json`.
+
+### Sent to the wallet, nothing on the phone
+
+In order: wallet in the background or on the PIN screen (bring it up); DID from a previous
+install (re-link with the current `Public DID`); no internet to the mediator on one side; the
+wallet rejected it (wallet log). `[wallet-link] delivered …` in the sender log proves the message
+left; the receiver's log proves it arrived. See `docs/OPERATIONS.md`.
+
+### `no did-communication service` when linking
+
+Not a wallet DID. Credo 0.7 delivers only to `did-communication`/`IndyAgent` services and drops
+DIDComm v2 `DIDCommMessaging`; the link step checks up front.
+
+### `Network request failed` in the wallet
+
+The device cannot reach Heka. Advertise the host's LAN address
+(`AGENT_OID4VCI_EP=http://<LAN-IP>:3003 docker compose -f docker-compose.dev.yml up -d heka-identity-service`;
+no re-seed needed) or, emulator only, `adb reverse tcp:3003 tcp:3003`. A changed network means a
+changed address — repeat.
 
 ### `no presentation was received in time`
 
@@ -49,8 +73,8 @@ expiring, same practical cause.
 
 ### Every entry turns `NO_ATTESTATION` with `no such table: items`
 
-The verifier's Askar store evaporated. `inMemory: true` puts the database *inside the pooled
-connection*, so when the pool retires that connection the replacement opens an empty one —
+The verifier's Askar store evaporated. `inMemory: true` puts the database _inside the pooled
+connection_, so when the pool retires that connection the replacement opens an empty one —
 observed about twenty minutes into an idle stand, and it looks like a Hedera or network problem
 because DID resolution is what fails.
 

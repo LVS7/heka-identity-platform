@@ -6710,6 +6710,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"qrcode-generator@npm:^2.0.4":
+  version: 2.0.4
+  resolution: "qrcode-generator@npm:2.0.4"
+  checksum: 10c0/52dc3894bda6afecf09cb36aba9c181f3c4641fcbeac40c2af05d68da1383e3a1c7354bd3dc8c5e2a199d2e62314bbdec8cb4fbbd00bcfda40de56bb36bfdb17
+  languageName: node
+  linkType: hard
+
 "qs@npm:^6.14.0, qs@npm:^6.15.2, qs@npm:^6.7.0, qs@npm:~6.15.1":
   version: 6.15.3
   resolution: "qs@npm:6.15.3"
@@ -7573,6 +7580,7 @@ __metadata:
     genkit: "npm:^1.28.0"
     jose: "npm:^6.1.0"
     prettier: "npm:^3.8.1"
+    qrcode-generator: "npm:^2.0.4"
     selfsigned: "npm:^3.0.1"
     tsx: "npm:^4.21.0"
     typescript: "npm:^5.9.3"

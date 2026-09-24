@@ -2,8 +2,8 @@
  * A2A engagement, from the orchestrator's side.
  *
  * Streams a task with the agent and keeps the progress so the UI can poll it. When the agent
- * pauses in `auth-required`, the OID4VP request it carries is surfaced for the operator — as a
- * QR for Heka Wallet, or to the in-process simulated holder.
+ * pauses in `auth-required`, the OID4VP request it carries is surfaced for the operator — pushed
+ * to Heka Wallet over DIDComm, shown as a QR, or handed to the in-process simulated holder.
  */
 
 import { A2AClient } from '@a2a-js/sdk/client'
@@ -14,6 +14,7 @@ import { AuditLog } from '../core/audit'
 import { IdentityServiceClient } from '../shared/identity-service'
 import { SimulatedWallet } from '../shared/simulated-wallet'
 import { IN_TASK_OID4VP_EXTENSION_URI } from '../agent/extension'
+import { DeliveryState, deliverToWallet } from './wallet-delivery'
 
 export interface TaskEvent {
   at: string
@@ -28,6 +29,8 @@ export interface TrackedTask {
   events: TaskEvent[]
   /** Present only while the agent is waiting for a presentation. */
   authorizationRequest?: string
+  /** Last attempt to push the request to the operator's wallet, if any. */
+  delivery?: DeliveryState
   result?: string
   error?: string
 }
@@ -83,8 +86,7 @@ export class TaskTracker {
 
         if (update.status.state === 'auth-required') {
           const metadata = update.status.message?.metadata?.[IN_TASK_OID4VP_EXTENSION_URI] as
-            | { authorizationRequest?: { request_uri?: string } }
-            | undefined
+            { authorizationRequest?: { request_uri?: string } } | undefined
           task.authorizationRequest = metadata?.authorizationRequest?.request_uri
           this.audit.record('authorization', task.resource, 'authorization requested', {
             step: text,
@@ -95,12 +97,14 @@ export class TaskTracker {
         if (update.status.state === 'completed') {
           task.result = text
           task.authorizationRequest = undefined
+          task.delivery = undefined
           this.audit.record('authorization', task.resource, 'task completed after verified presentation')
         }
 
         if (update.status.state === 'failed') {
           task.error = text
           task.authorizationRequest = undefined
+          task.delivery = undefined
           this.audit.record('denial', task.resource, text ?? 'task failed')
         }
       }
@@ -109,6 +113,18 @@ export class TaskTracker {
       task.error = (error as Error).message
       this.audit.record('denial', task.resource, task.error)
     }
+  }
+
+  /** Push the pending request to the operator's wallet; the outcome is kept on the task. */
+  public async sendToWallet(task: TrackedTask, deliver: (content: string) => Promise<void>): Promise<DeliveryState> {
+    task.delivery = await deliverToWallet({
+      subject: task.resource,
+      content: task.authorizationRequest as string,
+      deliver,
+      audit: this.audit,
+      previous: task.delivery,
+    })
+    return task.delivery
   }
 
   /** Present the officer credential against any OID4VP request — the agent's or the AS's. */

@@ -16,7 +16,8 @@ in [docs/GOAL.md](docs/GOAL.md); this file is about _how to close_ what is open 
 | 5   | [Stage the five verdicts nobody can see](#stage-the-five-verdicts-nobody-can-see)                                 | no                       |
 | 6   | [Widen the presentation window](#widen-the-presentation-window)                                                   | no                       |
 | 7   | [Run typecheck and tests on every change](#run-typecheck-and-tests-on-every-change)                               | no                       |
-| 8   | [Render the QR locally and show the raw request](#render-the-qr-locally-and-show-the-raw-request)                 | no                       |
+| 8   | [Show the wallet's public DID in the wallet](#show-the-wallets-public-did-in-the-wallet)                          | no                       |
+| 9   | [Drop the inbound DIDComm transport](#drop-the-inbound-didcomm-transport)                                         | no                       |
 
 ---
 
@@ -154,32 +155,32 @@ scripts and both are fast.
 
 ---
 
-## Render the QR locally and show the raw request
+## Show the wallet's public DID in the wallet
 
-**Why.** The UI turns an OID4VP authorization request into a QR code by handing it to a third-party
-service:
+**Why.** Requests and offers reach the phone over DIDComm, addressed to the wallet's public
+`did:peer:2`. Linking a wallet therefore means pasting that DID — and the wallet only ever prints
+it, as `Public DID: …` in its startup log (`heka-wallet/app/src/screens/Splash.tsx`). React
+Native 0.81 no longer echoes that log in the Metro terminal, so reading it means React Native
+DevTools or `adb logcat` — developer tooling in a flow that otherwise no longer needs any.
 
-```js
-el('auth-qr').src =
-  `https://api.qrserver.com/v1/create-qr-code/?…&data=${encodeURIComponent(task.authorizationRequest)}`
-```
+**What it takes.** A line in the wallet's settings screen showing the DID with a copy button, or
+a QR of it that the Trust Lens could scan through a webcam. Upstream in `heka-wallet`, not here.
 
-Two consequences. The request URI — `client_id` and the `request_uri` the wallet will fetch —
-leaves the machine and goes to a SaaS that has nothing to do with the demo. Nothing sensitive is
-disclosed (the `request_uri` points at localhost and is useless to anyone else, and the credential
-never travels this way), but a demo whose argument is _decentralized_ identity should not route its
-authorization requests through a random external renderer, and the UI silently needs internet to
-show a QR at all.
+**What it buys.** The link step stops depending on a log line, and a release build of the wallet
+becomes usable for the demo without developer tooling on the machine.
 
-The second consequence is practical: the raw URI is never rendered, and there is no endpoint that
-lists tasks, so once the QR is on screen the request cannot be recovered. On an emulator, where
-there is no camera to scan with, that makes the Engage button unusable — the whole step has to be
-driven from the command line instead, which the README now explains at length because the UI
-cannot.
+---
 
-**What it takes.** Generate the QR client-side from a vendored library, and print the URI next to
-it as selectable text with a copy button.
+## Drop the inbound DIDComm transport
 
-**What it buys.** The demo stops depending on an external service and works offline; the emulator
-path stops needing a shell; and the walkthrough's "scan this" step becomes true for every device
-instead of only for a phone with a camera.
+**Why.** `src/shared/wallet-link-credo.ts` opens an inbound HTTP transport on
+`TRUST_LENS_DIDCOMM_PORT` / `TRUSTCO_CONSOLE_DIDCOMM_PORT`, mirroring the reference demo. Reading
+Credo's message sender shows it is not needed: the sender's `did:key` has no endpoint, so Credo
+marks the message `return_route: all` by itself, and the wallet never replies to the sender in
+any case — it answers Heka.
+
+**What it takes.** Remove the inbound transport and the `endpoints` option, delete the two port
+variables, and run the DIDComm path once end to end to confirm delivery is unchanged.
+
+**What it buys.** Two fewer ports to document and to collide with, and a module that says only
+what it needs.

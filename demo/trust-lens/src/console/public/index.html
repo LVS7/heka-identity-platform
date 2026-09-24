@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TrustCo Console</title>
-    <link rel="stylesheet" href="../../web/public/app.css" />
+    <link rel="stylesheet" href="./shared/app.css" />
     <style>
       .issuer {
         margin-top: 18px;
@@ -43,6 +43,19 @@
         font-size: 12.5px;
         margin: 0;
       }
+      .tile .actions {
+        justify-content: flex-end;
+      }
+      .offer-note {
+        grid-column: 1 / -1;
+        font-size: 13px;
+      }
+      .offer-note .ok {
+        color: var(--ok);
+      }
+      .offer-note .bad {
+        color: var(--bad);
+      }
     </style>
   </head>
   <body>
@@ -51,13 +64,28 @@
         <h1>TrustCo Console</h1>
         <p class="subtitle">Certification body — credential lifecycle</p>
       </div>
+      <div class="wallet" id="wallet">
+        <span class="badge" id="wallet-chip">wallet: not linked</span>
+        <input
+          id="wallet-did"
+          type="text"
+          placeholder="did:peer:2… (the wallet’s Public DID)"
+          aria-label="Wallet public DID"
+        />
+        <button id="wallet-link">Link wallet</button>
+        <span class="error" id="wallet-error"></span>
+      </div>
     </header>
 
     <main>
       <p class="note">
-        Revoking here updates the published status list. Any relying party reading it — including
-        the Trust Lens and the agent — sees the change on its next check. Nothing is republished,
-        and the registry is not involved.
+        Revoking here updates the published status list. Any relying party reading it — including the Trust Lens and the
+        agent — sees the change on its next check. Nothing is republished, and the registry is not involved.
+      </p>
+      <p class="note">
+        <strong>Send offer to wallet</strong> issues the operator’s Finance Data Officer credential: a fresh OID4VCI
+        offer, delivered to the linked Heka Wallet over DIDComm. The wallet is linked by its Public DID, here or in the
+        Trust Lens — the link is shared.
       </p>
 
       <div id="tiles" class="cards"></div>

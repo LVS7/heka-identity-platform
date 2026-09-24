@@ -18,6 +18,8 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 
+import { DeliveryState } from './wallet-delivery'
+
 export interface ToolCallOutcome {
   status: number
   ok: boolean
@@ -36,6 +38,8 @@ export interface PendingAuthorization {
   resource: string
   scope: string
   message?: string
+  /** Last attempt to push the request to the operator's wallet, if any. */
+  delivery?: DeliveryState
 }
 
 const REDIRECT_URI = 'http://localhost:4000/oauth/callback'
@@ -159,7 +163,11 @@ export class McpClient {
       }),
     })
 
-    const token = (await tokenResponse.json()) as { access_token?: string; expires_in?: number; error_description?: string }
+    const token = (await tokenResponse.json()) as {
+      access_token?: string
+      expires_in?: number
+      error_description?: string
+    }
     if (!token.access_token) throw new Error(token.error_description ?? 'token request failed')
 
     this.accessToken = token.access_token

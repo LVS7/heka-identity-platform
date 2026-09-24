@@ -1,6 +1,6 @@
 ---
 name: wallet-flow
-description: Use when the demo needs the real Heka Wallet - starting the Android emulator, building or launching the app, loading the Finance Data Officer credential, and presenting it to the agent or the authorization server. Covers the Windows build traps and the short presentation window.
+description: Use when the demo needs the real Heka Wallet - starting the Android emulator, launching the app, linking the wallet by its public DID, sending it the Finance Data Officer credential from the TrustCo Console, and presenting to the agent or the authorization server with "Send to wallet". Covers the LAN-address setup for Heka, the Windows build traps and the short presentation window.
 ---
 
 # Driving the real wallet
@@ -10,41 +10,48 @@ choice for development. Use a real wallet when human-in-the-loop is the thing be
 because who presented a credential is the subject of this demo, and a simulation cannot make that
 point.
 
+Everything reaches the phone over **DIDComm**: the Trust Lens and the TrustCo Console send basic
+messages to the wallet's public `did:peer:2` through its cloud mediator (`src/shared/wallet-link.ts`,
+after `demo/a2a-oid4vp`). No `adb` is involved in the flow. The wallet needs internet for the
+mediator; so does the host.
+
 ## Boundaries
 
 Two things belong to the person, not the agent: **the wallet PIN** and **tapping Accept/Share**.
 Do not enter or tap them on someone's behalf; ask, and wait. Everything else below is fair game.
 
-## 1. Emulator
+## 1. Make Heka reachable from the device — once per network
+
+Heka advertises `http://localhost:3003`; on the device that is the device. Advertise the host's
+LAN address instead:
+
+```bash
+powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 | ? { \$_.InterfaceAlias -notmatch 'vEthernet|WSL|Loopback|Docker' -and \$_.IPAddress -notlike '127.*' } | select InterfaceAlias,IPAddress"
+cd ../../heka-identity-service
+AGENT_OID4VCI_EP=http://<LAN-IP>:3003 docker compose -f docker-compose.dev.yml up -d heka-identity-service
+```
+
+`up -d` re-creates only the service container; never `down` (it wipes Postgres). No re-seed:
+offers and requests are minted on demand and carry the new address. The LAN address changes with
+the network — repeat after switching Wi-Fi.
+
+Emulator-only fallback: leave Heka alone and `adb reverse tcp:3003 tcp:3003` +
+`adb reverse tcp:3000 tcp:3000` after every emulator restart.
+
+## 2. Emulator
 
 ```bash
 emulator -avd <name> -memory 2048 -no-snapshot -no-boot-anim -netdelay none -netspeed full &
-adb wait-for-device
-adb shell getprop sys.boot_completed   # 1 when ready
 ```
 
 2 GB is enough. Budget 3–4 GB of host RAM for the emulator process; stop what the current step
-does not need.
-
-## 2. Port reverses — required, and they do not survive a restart
-
-```bash
-adb reverse tcp:3003 tcp:3003   # OID4VC — the wallet cannot work without this
-adb reverse tcp:3000 tcp:3000
-adb reverse tcp:8081 tcp:8081   # Metro, for a dev build
-```
-
-Re-run after every emulator restart.
+does not need. `emulator` lives in `$LOCALAPPDATA/Android/Sdk/emulator` and is not on `PATH`.
 
 ## 3. The app
 
-If already installed (`adb shell pm list packages | grep heka`), just launch it:
-
-```bash
-adb shell monkey -p com.heka.wallet -c android.intent.category.LAUNCHER 1
-```
-
-A dev build loads JS from Metro, so start that first (`yarn start` in `heka-wallet/app`).
+A dev build loads JS from Metro, so start that first (`yarn start` in `heka-wallet/app`), then
+open the app on the device. If it is not installed, `yarn run:android` from `heka-wallet/app`
+installs and launches it.
 
 **Dismiss the 16 KB compatibility dialog** — the native libraries are not 16 KB aligned, Android
 runs the app in compatibility mode, and it is harmless. Tap `Don't Show Again` or it returns every
@@ -63,35 +70,52 @@ Only if the app is not installed. Three traps, all encountered:
   A junction does not help: React Native resolves it back to the real path.
 - **Node 20/22.** RN 0.81 rejects Node 24.
 
-## 4. Getting the credential into the wallet
+## 4. Link the wallet
 
-`yarn seed` prints a credential offer. On an emulator, deep-link it rather than pointing the
-camera at a QR:
+After the PIN the wallet logs `Public DID: did:peer:2…`. RN 0.81 does not echo JS logs in the
+Metro terminal — open React Native DevTools (`j` in Metro) or read the device log:
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d '<openid-credential-offer://…>' com.heka.wallet
+adb logcat -d -s ReactNativeJS | grep -o "Public DID: did:peer:[^ \"]*" | tail -1
 ```
 
-The wallet shows a Credential Offer screen — **the person taps Accept** (scroll down; it sits
+Paste it into the **wallet** field in the header of the Trust Lens (`http://localhost:4000`) or the
+Console (`http://localhost:4100`) and press **Link wallet**. Or:
+
+```bash
+curl -s -X POST http://localhost:4000/api/wallet/link -H 'content-type: application/json' \
+  -d '{"holderDid":"did:peer:2…"}'
+```
+
+The link is written to `.wallet-link.json` and shared by both processes. A reinstalled or reset
+wallet has a new DID — link again. `no did-communication service` means the value is not a wallet
+DID.
+
+## 5. Getting the credential into the wallet
+
+Console → Finance Data Officer tile → **Send offer to wallet** (or
+`curl -s -X POST http://localhost:4100/api/credentials/officer/offer`). The wallet, in the
+foreground, shows a Credential Offer screen — **the person taps Accept** (scroll down; it sits
 below Decline).
 
-If `yarn seed --reset` has run since, the old credential is stale: mint a fresh offer against the
-current issuer and repeat.
+Every press mints a fresh single-use offer, so after `yarn seed --reset` or a wallet reset, just
+press again.
 
 Verify it landed: the Credentials tab should list `urn:heka:role-credential:v1`.
 
-## 5. Presenting
+## 6. Presenting
 
 Same mechanism for both protocol paths — only the verifier differs.
 
-**A2A.** Start a task, poll until `auth-required`, take `authorizationRequest`, deep-link it:
+**A2A.** Engage the verified agent; when the panel says _Authorization required_, press
+**Send to wallet**. Without the UI:
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d '<openid4vp://…>' com.heka.wallet
+curl -s -X POST http://localhost:4000/api/task/<id>/send-to-wallet     # once state is auth-required
 ```
 
-**MCP.** Call the sensitive tool, take `authorization.request` from the response, deep-link the
-same way.
+**MCP.** Invoke `suppliers-export-bank-details`, press **Send to wallet** on the scope challenge, or
+`curl -s -X POST http://localhost:4000/api/mcp/send-to-wallet`.
 
 Either way the wallet shows a Proof Request listing `role` and `org` — **the person taps Share**.
 
@@ -104,31 +128,32 @@ The verification session expires after Credo's default window and Heka does not 
 Error while accepting authorization request. {"error":"invalid_request","error_description":"session expired"}
 ```
 
-So: create the request and deep-link it in **one step**, tell the person to tap immediately, and
-do not interleave screen dumps or scrolling. If it expires, just repeat — nothing is corrupted.
+So: have the wallet unlocked and in the foreground _before_ pressing Send, tell the person to tap
+immediately, and do not interleave screen dumps or scrolling. If it expires, **Resend to wallet**
+(same session) or engage again — nothing is corrupted.
 
-## 6. Confirming it was really the wallet
+## 7. Confirming it was really the wallet
 
 Do not take completion as proof; the simulated holder produces the same task outcome. Check both
 sides:
 
-```bash
-adb logcat -d | grep -i "verified Authorization Request"     # the wallet resolved and verified it
-docker logs trustlens-agent | grep -E "RequestUriRetrieved|ResponseVerified"
-```
+- the Trust Lens / Console log: `[wallet-link] delivered …`, and the Audit tab entry
+  _authorization request delivered to the operator's wallet_;
+- the wallet's log (React Native DevTools, or `adb logcat -d -s ReactNativeJS`): the wallet
+  resolving and verifying the request;
+- the agent's terminal: `session … -> RequestUriRetrieved` (the wallet fetched the request) before
+  `ResponseVerified`.
 
-`RequestUriRetrieved` is the moment the wallet fetched the request. Together with the wallet's own
-log, that is evidence rather than inference.
+Together that is evidence rather than inference.
 
-## Reading the screen
+## Reading the screen without touching it
 
-`adb exec-out screencap` returns a black frame on a GPU emulator. Use the accessibility tree
-instead:
+The wallet's log (DevTools / logcat) says what screen it is on. If you must look at the device,
+`adb exec-out screencap` returns a black frame on a GPU emulator; use the accessibility tree:
 
 ```bash
 adb shell uiautomator dump /sdcard/ui.xml && adb pull /sdcard/ui.xml
 ```
 
-It gives text, content-desc and bounds — enough to find a button and to know what the screen says.
-Taps via `adb shell input tap` are unreliable on a loaded emulator; prefer asking the person, and
-note that a modal (`Process system isn't responding`) usually means the emulator is starved of RAM.
+That is diagnostics, not the flow. A modal `Process system isn't responding` means the emulator is
+starved of RAM.

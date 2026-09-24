@@ -97,8 +97,8 @@ sequenceDiagram
     Agent->>HIS: create verification session<br/>PEX asks for role + org, limit_disclosure
     HIS-->>Agent: request_uri + client_id
     Agent-->>Lens: status-update auth-required<br/>metadata[extension].authorizationRequest
-    Lens-->>Op: QR code / deep link
-    Op->>W: open the request
+    Op->>Lens: Send to wallet
+    Lens->>W: DIDComm basic message carrying the request<br/>(or the operator scans the QR)
     W->>HIS: GET request_uri
     HIS-->>W: signed authorization request
     W-->>Op: shows exactly two claims — role, org
@@ -118,7 +118,7 @@ sequenceDiagram
 
 1. **Task initiation**: only a `VERIFIED` resource can be engaged; the control is disabled otherwise and an attempt is recorded.
 2. **In-task authentication request**: the agent works until the payment export, decides that step is sensitive, asks Heka for an OID4VP request and returns `auth-required` carrying it in `message.metadata[<extension URI>]`.
-3. **Wallet invocation**: the Trust Lens renders a QR code or a deep link.
+3. **Wallet invocation**: the operator presses **Send to wallet** and the Trust Lens delivers the request to the linked Heka Wallet as a DIDComm basic message — the same mechanism as `demo/a2a-oid4vp`. A QR code and the raw URI are shown alongside for a phone with a camera.
 4. **Sharing the presentation**: the wallet fetches and verifies the request, shows exactly two claims — `role` and `org` — and submits the VP over `direct_post.jwt` only after the person taps Share.
 5. **Verification**: Heka validates the presentation and notifies the agent over WebSocket.
 6. **Revocation check**: the agent then consults the status list itself, because Heka's verifier does not. An unreadable list means refuse.
@@ -151,7 +151,8 @@ sequenceDiagram
     AS->>HIS: create verification session, same PEX the agent used
     HIS-->>AS: authorization request
     AS-->>Lens: interaction openid4vp + authorizationRequest
-    Lens-->>Op: QR code / deep link
+    Op->>Lens: Send to wallet
+    Lens->>W: DIDComm basic message carrying the request
     Op->>W: Share — the same officer credential
     W->>HIS: authorization response, VP
     HIS-->>AS: ResponseVerified
@@ -168,7 +169,7 @@ sequenceDiagram
 
 1. **Least privilege per call**: `invoices-list` answers immediately — being verified at discovery is not the same as being unlocked. `suppliers-export-bank-details` answers `401` and names the scope it needs. (A token that exists but lacks that scope gets `403 insufficient_scope` instead.)
 2. **Step-up**: the client walks the spec's own chain — protected resource metadata (RFC 9728) → authorization server metadata (RFC 8414) → authorization with PKCE S256 and an RFC 8707 resource indicator.
-3. **Interaction**: where a login form would be, the authorization server runs an OID4VP presentation asking for the **same officer credential**.
+3. **Interaction**: where a login form would be, the authorization server runs an OID4VP presentation asking for the **same officer credential**. The Trust Lens pushes it to the wallet exactly as in the A2A path.
 4. **Grant**: after verifying the presentation and checking the status list, it mints a ~5 minute ES256 token carrying `scope`, `role` and `org`, audience-bound to that one MCP server.
 5. **Retry**: the original call succeeds and the resource server reports `authorizedBy`.
 
@@ -239,7 +240,8 @@ Most values match the defaults of a local Heka Identity Service and can be kept 
 - `SITES_PORT` — keep `443`. The catalogs and cards written by `yarn seed` carry no port in their URLs, so any other value makes the digest-bound card fetch miss.
 - `ACME_AGENT_PUBLIC_URL` — the URL the agent advertises **inside its agent card**. An A2A client connects to that, not to the URL it was handed, so this is what decides reachability on Path B.
 - `AGENT_AUTH_TIMEOUT_MS` (default `180000`), `AS_TOKEN_TTL` (default `300`)
-- `HOLDER_PUBLIC_DID` — only needed for DIDComm wallet invocation; deep links and the simulated holder work without it
+- `HOLDER_PUBLIC_DID` — optional seed for the wallet link (the wallet's `Public DID`). Linking from either UI writes `.wallet-link.json`, which takes precedence. The QR and the simulated holder work without any link
+- `TRUST_LENS_DIDCOMM_PORT` (default `4010`), `TRUSTCO_CONSOLE_DIDCOMM_PORT` (default `4110`) — inbound DIDComm ports of the two processes that message the wallet
 
 ---
 
@@ -267,7 +269,7 @@ yarn seed
 
 `yarn seed` creates four `did:hedera` identities on testnet, registers TrustCo as an issuer, creates a status list, then issues the credentials and writes the publisher catalogs — each layer digest-bound to the one below.
 
-It is idempotent: re-running keeps the DIDs, `--check` reports completeness, and `--reset` re-issues everything (a few minutes; it writes to Hedera testnet, and it invalidates any credential already loaded into a wallet). At the end it prints a credential offer — that is how the Finance Data Officer credential gets onto a phone.
+It is idempotent: re-running keeps the DIDs, `--check` reports completeness, and `--reset` re-issues everything (a few minutes; it writes to Hedera testnet, and it invalidates any credential already loaded into a wallet). At the end it prints a credential offer for a phone with a camera; with a linked wallet, the TrustCo Console's **Send offer to wallet** is the easier route (see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)).
 
 ### A3. Start the six services
 
@@ -379,6 +381,8 @@ docker run -d --rm --name trustlens-console $COMMON -p 4100:4100 \
 
 The first start takes about a minute while each container installs socat and boots tsx.
 
+Two things carry over from the host setup without extra flags: the wallet link (`.wallet-link.json`, written by either UI) lives in the mounted repo directory, so the web and the console containers share it; and the DIDComm ports (`4010`, `4110`) need no `-p` — delivery to the wallet is outbound only. If Heka advertises your LAN address (see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), the `3003` half of the bridge becomes unnecessary; it does no harm.
+
 `Conflict. The container name "/trustlens-…" is already in use` means that service is **already running** — check with `docker ps` before assuming anything is wrong. To restart one, remove it first: `docker rm -f trustlens-sites`.
 
 Any other script runs the same way:
@@ -419,11 +423,13 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens) and **http://l
 
 1. Search **Acme invoice** → three results, all "Not verified", relevance 93 / 93 / 91. An empty list means the publisher sites are unreachable — see A1 on Path A, or check that you have not mixed the two paths.
 2. **Verify all** → `VERIFIED`, `VERIFIED`, `SUBJECT_MISMATCH`. Open **Evidence** on the lookalike: every check passes until the subject binding, where the manifest identity and the credential subject sit side by side.
-3. **Engage** the verified agent — the control is disabled on the others, and the refusal is audited. It pauses for authorization: scan the QR with Heka Wallet, or use **Simulate presentation**. The task completes with the payment export.
+3. **Engage** the verified agent — the control is disabled on the others, and the refusal is audited. It pauses for authorization and offers three ways to present: **Send to wallet** (a DIDComm message to the linked Heka Wallet — see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), a QR code with the raw request for a phone with a camera, or **Simulate presentation** without a phone. The task completes with the payment export.
 
-   > Present promptly. The verification session expires after Credo's default window and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow scan fails with `session expired`. Nothing is corrupted — just repeat.
+   > Present promptly. The verification session expires after Credo's default window and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired`. Nothing is corrupted — press **Resend to wallet** or engage again.
 
-4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears; present the credential the same way. The original call is retried automatically and the result names who authorized it. Watch the token's TTL count down.
+   Engaging the verified **MCP server** instead takes you to the MCP tools tab: an MCP server is engaged by calling its tools, not by starting a task.
+
+4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. Watch the token's TTL count down.
 5. In the Console, **revoke** the Finance Data Officer credential.
    - Engage the agent again → the presentation still submits, and the sensitive step is then denied.
    - For the MCP path, drop the cached token first (restart the Trust Lens service) — a token already minted stays valid for its remaining five minutes, which is how OAuth is meant to behave — then the authorization server refuses to mint a new one.
@@ -447,11 +453,32 @@ yarn typecheck     # tsc --noEmit
 
 Only needed to show a human in the loop with a real device. **Simulate presentation** exercises the identical protocol without one, and is the right choice while developing — use a wallet when _who presented the credential_ is the point being made.
 
-An Android device or emulator is strongly recommended: ADB can reverse ports to `localhost`, so the wallet reaches the Identity Service with no tunnelling. On iOS you would have to expose Heka on your LAN address or through something like ngrok.
+Nothing in this section uses `adb` for the flow itself. The request and the credential offer reach the wallet as **DIDComm basic messages** (the same mechanism as the reference `demo/a2a-oid4vp`): the Trust Lens or the TrustCo Console sends them to the wallet's public `did:peer:2` through its cloud mediator, and Heka Wallet routes the content to the same screen a scanned QR would open. A person still taps **Accept** and **Share** — that tap is the demonstration.
 
 > **Budget the memory first.** The emulator wants 3–4 GB on top of the demo. On a 16 GB machine, close what you are not using — an IDE is typically 1–1.5 GB each. Android Studio itself can be closed as soon as the emulator has booted; the emulator is a separate process and keeps running.
 
-### 1. Start the emulator
+### 1. Make Heka reachable from the device
+
+Heka mints offers and requests pointing at `http://localhost:3003`. On a phone or an emulator, `localhost` is the device itself. Tell Heka to advertise your machine's LAN address instead — the emulator, a phone on the same Wi-Fi, and every host-side process can all reach it:
+
+```bash
+powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.InterfaceAlias -notmatch 'vEthernet|WSL|Loopback|Docker' -and \$_.IPAddress -notlike '127.*' -and \$_.IPAddress -notlike '169.*' } | Select-Object InterfaceAlias,IPAddress"
+```
+
+(`ipconfig` works too, but its labels are localised — on a Russian Windows the adapter is «Адаптер Ethernet» and the line is «IPv4-адрес» — so look for the `192.168.…` line rather than grepping for English words. On Linux/macOS: `ip -4 addr` or `ifconfig`.)
+
+```bash
+cd ../../heka-identity-service
+AGENT_OID4VCI_EP=http://192.168.1.23:3003 docker compose -f docker-compose.dev.yml up -d heka-identity-service
+```
+
+`up -d` re-creates only the Identity Service container; Postgres and its data stay. Do **not** `down`. No re-seed is needed: offers and requests are minted on demand and pick up the new address, and the hosted passports never referenced this port. (Only the offer `yarn seed` printed earlier is stale — the console mints a fresh one anyway.)
+
+The address is specific to the network you are on. After switching networks, repeat the command.
+
+**Fallback for an emulator only:** leave Heka on `localhost` and reverse the ports instead — `adb reverse tcp:3003 tcp:3003` and `adb reverse tcp:3000 tcp:3000`, re-run after every emulator restart. This is the one place `adb` still appears, and only if you skip the LAN-address step.
+
+### 2. Start the emulator
 
 From Android Studio: **More Actions → Virtual Device Manager** on the welcome screen, or **Tools → Device Manager** with a project open. Press **▶** next to the device. Then close Android Studio.
 
@@ -460,57 +487,27 @@ Or without the IDE at all. `emulator -list-avds` prints the device names — sub
 ```bash
 cd "$LOCALAPPDATA/Android/Sdk/emulator"
 ./emulator.exe -avd Pixel_7 -memory 2048 -no-snapshot -no-boot-anim -netdelay none -netspeed full &
-adb wait-for-device
-adb shell getprop sys.boot_completed   # 1 when ready, usually 30–60 s
 ```
 
-`cd` into the emulator directory first on Windows: launched by absolute path from elsewhere it often dies with `PANIC: Broken AVD system path`, because it resolves its own libraries relative to the binary. `-memory 2048` keeps it to 2 GB, `-no-snapshot` forces a clean cold boot, and the `-net*` flags remove the emulator's artificial network latency.
+`cd` into the emulator directory first on Windows: launched by absolute path from elsewhere it often dies with `PANIC: Broken AVD system path`, because it resolves its own libraries relative to the binary. `-memory 2048` keeps it to 2 GB, `-no-snapshot` forces a clean cold boot, and the `-net*` flags remove the emulator's artificial network latency. The emulator needs internet access: the wallet talks to its mediator (`did:web:mediator.dev.paradym.id`), and so does the Trust Lens.
 
-**`adb` and `emulator` are almost never on `PATH`** — Android Studio does not add them, so `adb …` fails with `not recognized as the name of a cmdlet` (PowerShell) or `command not found` (bash). They live in the SDK. Put them on `PATH` for this session:
+`emulator` (and `adb`, if you use the fallback) are almost never on `PATH` — Android Studio does not add them. They live in the SDK:
 
 ```bash
 export PATH="$PATH:$LOCALAPPDATA/Android/Sdk/platform-tools:$LOCALAPPDATA/Android/Sdk/emulator"   # Git Bash
 ```
 
-```powershell
-$env:Path += ";$env:LOCALAPPDATA\Android\Sdk\platform-tools;$env:LOCALAPPDATA\Android\Sdk\emulator"
-```
-
-Or permanently, from PowerShell — no administrator needed, and it applies to new terminals only:
-
-```powershell
-[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$env:LOCALAPPDATA\Android\Sdk\platform-tools;$env:LOCALAPPDATA\Android\Sdk\emulator", 'User')
-```
-
-`emulator -list-avds` then prints the device names, and `adb devices` should list `emulator-5554` once one has booted.
-
-### 2. Reverse the ports
-
-**Re-run these after every emulator restart** — they do not survive one:
-
-```bash
-adb reverse tcp:3003 tcp:3003   # OID4VC — the wallet cannot work without this
-adb reverse tcp:3000 tcp:3000
-adb reverse tcp:8081 tcp:8081   # Metro, for a development build
-```
-
 ### 3. Install and launch the app
 
-Build and run from the [heka-wallet](../../heka-wallet) folder. If it is already installed (`adb shell pm list packages | grep heka`), just launch it:
-
-```bash
-adb shell monkey -p com.heka.wallet -c android.intent.category.LAUNCHER 1
-```
-
-A **development build carries no JS bundle** — it loads one from Metro. Start that first, in its own terminal, or the app dies on a red screen with `Failed to connect to /10.0.2.2:8081`:
+Build and run from the [heka-wallet](../../heka-wallet) folder. A **development build carries no JS bundle** — it loads one from Metro, so start that first, in its own terminal, or the app dies on a red screen with `Failed to connect to /10.0.2.2:8081`:
 
 ```bash
 yarn start        # in heka-wallet/app
 ```
 
-The first bundle takes several minutes. Two harmless things on launch: a **16 KB compatibility dialog** (the native libraries are not 16 KB aligned — tap `Don't Show Again`), and the PIN prompt, which is yours.
+Then open the app on the device (tap its icon, or `yarn run:android` from `heka-wallet/app`, which also installs it). The first bundle takes several minutes. Two harmless things on launch: a **16 KB compatibility dialog** (the native libraries are not 16 KB aligned — tap `Don't Show Again`), and the PIN prompt, which is yours.
 
-**Keep `ENABLE_EXAMPLE_CREDENTIAL=false`** in `heka-wallet/app/.env`, which is its committed default. That flag makes the wallet mint a sample credential of its own at first launch, which this demo does not use — the Finance Data Officer credential arrives through the seed's OID4VCI offer instead. It also currently fails on launch with `Failed to create holder DID … Error: 1045`, so turning it on buys a broken onboarding and nothing else.
+**Keep `ENABLE_EXAMPLE_CREDENTIAL=false`** in `heka-wallet/app/.env`, which is its committed default. That flag makes the wallet mint a sample credential of its own at first launch, which this demo does not use — the Finance Data Officer credential arrives through the console's offer instead. It also currently fails on launch with `Failed to create holder DID … Error: 1045`, so turning it on buys a broken onboarding and nothing else.
 
 #### Building the wallet on Windows
 
@@ -522,124 +519,60 @@ Skip this if the app is already installed, or if you are on Linux/macOS. Three t
 
 That copy is a build workaround, not part of the project: nothing in the demo reads from it, and it does not need to be kept in sync. Only the resulting APK matters, and once it is installed you can delete the copy — it is several gigabytes once `node_modules` and build output are in it.
 
-### 4. Load the credential
+### 4. Link the wallet
 
-This puts the Finance Data Officer credential **into** the wallet. Until it is there the wallet has nothing to present, and step 5 cannot happen. TrustCo issues an offer; the wallet claims the credential over OID4VCI. It is one-time preparation, not part of the scenario.
+Once the wallet is past its PIN, it logs a line like:
 
-Check the wallet's **Credentials** tab first — if it already lists `urn:heka:role-credential:v1`, skip to step 5.
-
-On a phone you would scan the QR that `yarn seed` prints. An emulator has no usable camera, so send the same URI to the app as an Android intent instead. From this directory:
-
-```bash
-OFFER=$(node -p "require('./.seed-state.json').officerOffer")
-adb shell am start -a android.intent.action.VIEW -d "'$OFFER'" com.heka.wallet
+```
+Public DID: did:peer:2.Vz6Mk…
 ```
 
-The first line reads the offer the seed already saved — the terminal that printed it is usually long gone. The second tells Android "open this `openid-credential-offer://` link with the wallet", which is exactly what scanning the QR would do. The wallet opens on a Credential Offer screen, and **you tap Accept** (scroll down; it sits below Decline).
+That is the wallet's address. React Native 0.81 no longer echoes JavaScript logs in the Metro terminal; read it in **React Native DevTools** (press `j` in the Metro terminal — the console tab shows it) or, with the SDK tools on `PATH`, from the device log:
 
-Note the quotes around `$OFFER`. `adb shell` runs the command through a shell **on the device**, and an unquoted `&` inside the URI truncates it there — the wallet then reports a malformed request, which reads like a protocol problem rather than a quoting mistake.
+```bash
+adb logcat -d -s ReactNativeJS | grep -o "Public DID: did:peer:[^ \"]*" | tail -1
+```
+
+(That is diagnostics, not part of the flow — the DID is pasted once and persists.) Paste it into the **wallet** field in the Trust Lens header (or the TrustCo Console's — the link is shared) and press **Link wallet**. The chip turns green. The link is persisted in `.wallet-link.json`, so it survives restarts; `HOLDER_PUBLIC_DID` in `.env` can seed it instead.
+
+The DID is stable for as long as the wallet keeps its data. Reinstalling or resetting the app produces a new one — link again.
+
+If linking fails with _no did-communication service_, the pasted value is not a wallet DID (Credo 0.7 only delivers to `did-communication` services, which is what the wallet publishes).
+
+### 5. Load the credential
+
+This puts the Finance Data Officer credential **into** the wallet. Until it is there the wallet has nothing to present. It is one-time preparation, not part of the scenario.
+
+Check the wallet's **Credentials** tab first — if it already lists `urn:heka:role-credential:v1`, skip to step 6.
+
+In the **TrustCo Console** (`http://localhost:4100`), press **Send offer to wallet** on the Finance Data Officer tile. The console mints a fresh OID4VCI offer and delivers it over DIDComm; the wallet opens on a Credential Offer screen, and **you tap Accept** (scroll down; it sits below Decline). Have the wallet open in the foreground: an app in the background does not process the message until it comes back.
 
 The Credentials tab should now list one `urn:heka:role-credential:v1`.
 
-**An offer is single-use.** Once the wallet claims it, the Identity Service discards it and the URI stored in `.seed-state.json` is spent — so this section works exactly once per `yarn seed`. Deleting the credential inside the wallet does not bring it back; that is local state on the device, while the offer lived on the server. To load it again, mint a new one:
-
-```bash
-yarn seed     # idempotent: keeps the DIDs, passports and status list, mints a fresh offer
-```
+**An offer is single-use.** Each press of the button mints a new one, so pressing it again after a wallet reset is the whole recovery. The offer URI is also shown under the tile for a phone that would rather scan it.
 
 Two different failures show on the same "Unable to fetch credential offer" screen, and they need opposite fixes:
 
-| Cause line                                | What it means                                                                                                             | Fix                                      |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| `Network request failed`                  | the port reverses are gone — `localhost` inside the emulator is the emulator, and an emulator restart drops them silently | `adb reverse --list`, then re-run step 2 |
-| `unsuccessful response with status '404'` | the offer was already claimed                                                                                             | `yarn seed` for a fresh one              |
+| Cause line                                | What it means                                                                                   | Fix                                  |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `Network request failed`                  | the device cannot reach Heka — the LAN address is wrong or stale, or the port reverses are gone | step 1 again                         |
+| `unsuccessful response with status '404'` | the offer was already claimed                                                                   | press **Send offer to wallet** again |
 
-To tell them apart without guessing, fetch the stored offer from your machine — a `404` here means the offer is spent, and anything else points at the device side:
+### 6. Present it
 
-```bash
-node -e "const s=require('./.seed-state.json');fetch(decodeURIComponent(String(s.officerOffer).replace(/^.*credential_offer_uri=/,''))).then(r=>console.log(r.status))"
-```
+This is the step the whole section exists for: the agent reaches a sensitive action, stops, and waits for a person to approve it with the credential loaded in step 5.
 
-`Warning: Activity not started, intent has been delivered to currently running top-most instance` is not an error: the wallet was already open and Android routed the intent to it.
+Press **Engage** on the verified agent. When the task pauses, the authorization panel offers three ways to present; the first is **Send to wallet**. Press it — the request goes to the phone as a DIDComm message, the panel says _Sent · waiting for Share in Heka Wallet…_, and the wallet opens a **Proof Request** listing exactly two claims, `role` and `org` — not a name, not an employee id. **Tap Share.** The task continues to `completed` with the payment export ending "Export authorized by a verified Finance Data Officer presentation."
 
-### 5. Present it
+The MCP path is identical: invoke `suppliers-export-bank-details`, press **Send to wallet** on the scope challenge, tap Share, and the call is retried with the minted token.
 
-This is the step the whole section exists for: the agent reaches a sensitive action, stops, and waits for a person to approve it with the credential loaded in step 4.
+If the task ends `failed` instead, read the last line: `Authorization denied: … revoked by its issuer` means the credential is revoked (that is the kill switch working, not a bug), and a timeout means the tap came too late.
 
-On a real phone, press **Engage** in the UI and scan the QR it shows. The rest of this step is for an emulator, where there is no camera to scan with and the UI does not expose the underlying URI.
+> **The window is short.** The verification session expires after Credo's default window, and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired` in the wallet. Have the phone unlocked and the wallet open before pressing **Send to wallet**, and tap as soon as the screen appears. Nothing is corrupted if it expires — press **Resend to wallet**, or engage again.
 
-Run this from the demo directory — it engages the agent, waits for it to ask for authorization, sends the request straight to the wallet, and then reports how the task ends. **`adb` must be on `PATH`** (see step 1), or set `ADB` to its full path first:
+### 7. Confirm it was really the wallet
 
-```bash
-node --input-type=module <<'EOF'
-import { execFileSync } from 'node:child_process'
-
-const ADB = process.env.ADB ?? 'adb'
-const BASE = 'http://localhost:4000'
-const get = async (p) => (await fetch(BASE + p)).json()
-const post = async (p, body) =>
-  (await fetch(BASE + p, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })).json()
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
-const { taskId } = await post('/api/engage', {
-  identifier: 'urn:air:acme-invoices.example:finance:invoice-agent',
-  verdict: 'VERIFIED',
-})
-
-let request
-for (let i = 0; i < 25; i++) {
-  await sleep(800)
-  const task = await get(`/api/task/${taskId}`)
-  if (task.state === 'auth-required') {
-    request = task.authorizationRequest
-    break
-  }
-}
-if (!request) throw new Error('the agent never reached auth-required')
-
-// Quoted: adb runs this through a shell on the device, where a bare & truncates the URI.
-execFileSync(ADB, ['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', `'${request}'`, 'com.heka.wallet'])
-console.log(`task ${taskId}\n>>> delivered — TAP SHARE IN THE WALLET NOW <<<`)
-
-let last = 'auth-required'
-for (let i = 0; i < 100; i++) {
-  await sleep(1500)
-  const task = await get(`/api/task/${taskId}`)
-  if (task.state !== last) {
-    console.log(`  ${task.state}`)
-    last = task.state
-  }
-  if (task.state === 'completed' || task.state === 'failed') {
-    console.log(`\n${task.events.at(-1).text}`)
-    break
-  }
-}
-EOF
-```
-
-It is one command on purpose. The request has to be created and delivered without a pause in between — see the window note below — so there is nothing to copy between two terminals.
-
-What you should see: the wallet opens a **Proof Request** listing exactly two claims, `role` and `org` — not a name, not an employee id. **Tap Share.** The script then prints `working`, `completed`, and the payment export ending with "Export authorized by a verified Finance Data Officer presentation."
-
-If it prints `failed` instead, read the last line: `Authorization denied: … revoked by its issuer` means the credential is revoked (that is the kill switch working, not a bug), and a timeout means the tap came too late.
-
-> **The window is short.** The verification session expires after Credo's default window, and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired` in the wallet. Have the emulator in front of you before running the command, and tap as soon as the screen appears. Nothing is corrupted if it expires — run the command again.
-
-For the MCP path the shape is identical: `POST /api/mcp/call` with `suppliers-export-bank-details` returns `authorization.request`, which you deep-link the same way, then poll `GET /api/mcp/authorization` until it reports `granted`.
-
-### 6. Confirm it was really the wallet
-
-A completed task proves nothing on its own: the simulated holder produces the same outcome. Check both sides:
-
-```bash
-adb logcat -d | grep -i "verified Authorization Request"   # the wallet resolved and verified it
-```
-
-and, in the agent's terminal, the session reaching `RequestUriRetrieved` — the moment the wallet fetched the request — before `ResponseVerified`. Together that is evidence rather than inference.
+A completed task proves nothing on its own: the simulated holder produces the same outcome. Check both sides: the wallet's log (React Native DevTools, or `adb logcat -d -s ReactNativeJS`) shows it resolving the request (`verified Authorization Request`), and the agent's terminal shows the session reaching `RequestUriRetrieved` — the moment the wallet fetched the request — before `ResponseVerified`. The Audit tab records the delivery itself as _authorization request delivered to the operator's wallet_. Together that is evidence rather than inference.
 
 ## Components
 
@@ -654,6 +587,7 @@ and, in the agent's terminal, the session reaching `RequestUriRetrieved` — the
 | Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations |
 | Seed                 | `src/seed.ts`                    | DIDs, credentials, status list, catalogs                                |
 | Simulated holder     | `src/shared/simulated-wallet.ts` | presents the officer credential without a phone                         |
+| Wallet link          | `src/shared/wallet-link.ts`      | DIDComm delivery of requests and offers to the operator's Heka Wallet   |
 
 External: **Heka Identity Service** (issuer / verifier / status lists) and, optionally, **Heka Wallet** on a device.
 
@@ -662,6 +596,7 @@ External: **Heka Identity Service** (issuer / verifier / status lists) and, opti
 - **Verification lives in the orchestrator, never in the registry.** ARD assigns trust evaluation to the consumer, and relying parties choose their own trust anchors. Nothing the registry says can change a verdict: every input is re-fetched from the publisher.
 - **Domains are `.example`, not `.localhost`.** RFC 6761 makes `.localhost` a special name that resolvers hard-map to loopback, so a container could never reach the publisher container under that name.
 - **Revocation is checked by the relying party.** Heka's verifier confirms a presentation is cryptographically sound but does not consult the issuer's status list, so the Trust Lens, the agent and the authorization server each check it themselves. An unreadable status list fails closed.
+- **The wallet is addressed, not scanned.** Requests and offers reach Heka Wallet as DIDComm basic messages to its public `did:peer:2`, through its cloud mediator — the mechanism `demo/a2a-oid4vp` established. The connection is forged rather than negotiated (the wallet on Credo 0.7 does not yet do DID Exchange with the demo), which is fine for delivery: the wallet never answers the sender, it answers Heka.
 - **The registry is optional here.** Discovery reads the publishers directly, in the same shape the ARD registry contract returns. See [ADR-002](spec/ADR-002-registry-integration.md) for what it takes to run [mcp-gateway-registry](https://github.com/agentic-community/mcp-gateway-registry) in front of it, and the upstream issues that currently block it.
 
 ## Documentation

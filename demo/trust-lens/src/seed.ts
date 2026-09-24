@@ -37,6 +37,7 @@ import {
 } from './shared/demo-config'
 import { claimCredentialOffer, createHolderAgent, HolderAgent } from './shared/holder'
 import { IdentityServiceClient, identityServiceFromEnv } from './shared/identity-service'
+import { createOfficerOffer } from './shared/officer-offer'
 
 dotenv.config()
 
@@ -140,32 +141,6 @@ async function issueResourcePassport(
   ])
 
   return claimCredentialOffer(holder, credentialOffer)
-}
-
-async function createOfficerOffer(identityService: IdentityServiceClient, state: SeedState): Promise<string> {
-  const issuerDid = state.issuerDid as string
-  const statusListId = state.statusListId as string
-
-  const { credentialOffer } = await identityService.createIssuanceOffer(issuerDid, [
-    {
-      format: 'vc+sd-jwt',
-      credentialSupportedId: OFFICER_CREDENTIAL.configurationId,
-      issuer: { method: 'did', did: issuerDid },
-      payload: {
-        vct: ROLE_CREDENTIAL_VCT,
-        role: OFFICER_CREDENTIAL.role,
-        org: TRUSTCO.legalName,
-        credentialStatus: {
-          statusListCredential: identityService.statusListUrl(statusListId),
-          statusListIndex: state.statusIndexes.officer as number,
-        },
-      },
-      // The operator discloses only role and org when authorizing a task.
-      disclosureFrame: { _sd: [...OFFICER_CREDENTIAL.disclosed] },
-    },
-  ])
-
-  return credentialOffer
 }
 
 async function seed() {

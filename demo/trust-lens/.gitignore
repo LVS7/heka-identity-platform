@@ -2,4 +2,6 @@
 dist/
 
 .seed-state.json
+.wallet-link.json
 certs/
+.logs/

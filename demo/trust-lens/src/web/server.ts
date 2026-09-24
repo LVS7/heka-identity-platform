@@ -19,9 +19,12 @@ import { verifyEntry } from '../core/verify'
 import { createVerifierAgent, verifierDependencies, VerifierAgent } from '../shared/credential-verifier'
 import { ACME_DOMAIN, PRO_DOMAIN } from '../shared/demo-config'
 import { identityServiceFromEnv } from '../shared/identity-service'
+import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
+import { credoWalletTransport } from '../shared/wallet-link-credo'
 import { loadState } from '../seed/state'
 import { McpClient, PendingAuthorization } from './mcp-client'
 import { TaskTracker } from './tasks'
+import { deliverToWallet } from './wallet-delivery'
 
 dotenv.config()
 
@@ -32,6 +35,7 @@ const PUBLISHERS = [ACME_DOMAIN, PRO_DOMAIN]
 const AGENT_URL = process.env.ACME_AGENT_URL ?? `http://localhost:${process.env.ACME_AGENT_PORT ?? 10003}`
 const DEFAULT_TASK_PROMPT = 'Reconcile May supplier invoices and prepare the payment export.'
 const MCP_URL = process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.MCP_PORT ?? 4400}`
+const DIDCOMM_PORT = Number(process.env.TRUST_LENS_DIDCOMM_PORT ?? 4010)
 
 // The publisher sites use a self-signed development certificate.
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
@@ -88,6 +92,13 @@ function main() {
   const audit = new AuditLog()
   const tasks = new TaskTracker(AGENT_URL, audit, identityServiceFromEnv())
   const mcp = new McpClient(MCP_URL)
+  // The operator's phone. Credo is only brought up on first use, so a stand without a wallet
+  // pays nothing for this.
+  const walletLink = new WalletLink({
+    stateFile: WALLET_LINK_FILE,
+    initialDid: process.env.HOLDER_PUBLIC_DID,
+    transport: () => credoWalletTransport({ label: 'trust-lens-wallet-link', inboundPort: DIDCOMM_PORT }),
+  })
   let agent: VerifierAgent | undefined
   let pendingAuthorization: PendingAuthorization | undefined
 
@@ -100,7 +111,28 @@ function main() {
       trustedIssuers: [state.issuerDid],
       publishers: PUBLISHERS,
       registry: process.env.REGISTRY_URL ?? null,
+      wallet: walletLink.status,
     })
+  })
+
+  // ---------- operator's wallet ----------
+
+  app.get('/api/wallet', (_req, res) => {
+    res.json(walletLink.status)
+  })
+
+  /** Link the operator's Heka Wallet by its public DID (the wallet logs it at startup). */
+  app.post('/api/wallet/link', async (req, res) => {
+    try {
+      res.json(await walletLink.link(String(req.body?.holderDid ?? '').trim()))
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message })
+    }
+  })
+
+  app.delete('/api/wallet/link', async (_req, res) => {
+    await walletLink.unlink()
+    res.json(walletLink.status)
   })
 
   app.get('/api/discovery', async (req, res) => {
@@ -196,6 +228,22 @@ function main() {
     res.json(task)
   })
 
+  /** Push the pending OID4VP request to the operator's phone over DIDComm. */
+  app.post('/api/task/:id/send-to-wallet', async (req, res) => {
+    const task = tasks.get(req.params.id)
+    if (!task?.authorizationRequest) {
+      res.status(409).json({ error: 'this task is not waiting for an authorization' })
+      return
+    }
+    if (!walletLink.status.linked) {
+      res.status(409).json({ error: 'no wallet linked — paste the wallet’s Public DID first' })
+      return
+    }
+
+    const delivery = await tasks.sendToWallet(task, (content) => walletLink.send(content))
+    res.status(delivery.state === 'sent' ? 200 : 502).json({ delivery })
+  })
+
   /**
    * Present the officer credential from the in-process holder instead of a phone.
    * Clearly labelled as simulated in the UI and in the audit trail — who presented the
@@ -241,9 +289,14 @@ function main() {
       }
 
       // The server refused and named a scope: begin a step-up the operator can satisfy.
-      audit.record('denial', `MCP · ${tool}`, `refused: ${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'}`, {
-        requiredScope: outcome.requiredScope,
-      })
+      audit.record(
+        'denial',
+        `MCP · ${tool}`,
+        `refused: ${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'}`,
+        {
+          requiredScope: outcome.requiredScope,
+        }
+      )
 
       pendingAuthorization = await mcp.beginAuthorization(outcome)
       res.json({
@@ -260,6 +313,29 @@ function main() {
     } catch (error) {
       res.status(502).json({ error: (error as Error).message })
     }
+  })
+
+  /** Push the AS's OID4VP request to the operator's phone over DIDComm. */
+  app.post('/api/mcp/send-to-wallet', async (_req, res) => {
+    if (!pendingAuthorization) {
+      res.status(409).json({ error: 'no authorization is in progress' })
+      return
+    }
+    if (!walletLink.status.linked) {
+      res.status(409).json({ error: 'no wallet linked — paste the wallet’s Public DID first' })
+      return
+    }
+
+    pendingAuthorization.delivery = await deliverToWallet({
+      subject: `MCP · ${pendingAuthorization.scope}`,
+      content: pendingAuthorization.authorizationRequest,
+      deliver: (content) => walletLink.send(content),
+      audit,
+      previous: pendingAuthorization.delivery,
+    })
+    res
+      .status(pendingAuthorization.delivery.state === 'sent' ? 200 : 502)
+      .json({ delivery: pendingAuthorization.delivery })
   })
 
   /** Present the officer credential to the AS from the in-process holder. */
@@ -287,13 +363,18 @@ function main() {
     try {
       const granted = await mcp.completeAuthorization(pendingAuthorization)
       if (granted) {
-        audit.record('authorization', `MCP · ${pendingAuthorization.scope}`, 'scoped token issued against a verified presentation', {
-          ttlSeconds: mcp.tokenStatus.expiresInSeconds,
-          resource: pendingAuthorization.resource,
-        })
+        audit.record(
+          'authorization',
+          `MCP · ${pendingAuthorization.scope}`,
+          'scoped token issued against a verified presentation',
+          {
+            ttlSeconds: mcp.tokenStatus.expiresInSeconds,
+            resource: pendingAuthorization.resource,
+          }
+        )
         pendingAuthorization = undefined
       }
-      res.json({ granted, token: mcp.tokenStatus })
+      res.json({ granted, token: mcp.tokenStatus, delivery: pendingAuthorization?.delivery })
     } catch (error) {
       const message = (error as Error).message
       audit.record('denial', 'MCP · authorization', message)

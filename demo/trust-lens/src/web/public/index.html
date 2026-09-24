@@ -12,6 +12,18 @@
         <h1>Trust Lens</h1>
         <p class="subtitle">Discovery is a phone book. Credentials are what vouch.</p>
       </div>
+      <div class="wallet" id="wallet">
+        <span class="badge" id="wallet-chip">wallet: not linked</span>
+        <input
+          id="wallet-did"
+          type="text"
+          placeholder="did:peer:2… (the wallet’s Public DID)"
+          aria-label="Wallet public DID"
+        />
+        <button id="wallet-link">Link wallet</button>
+        <button id="wallet-unlink" hidden>Unlink</button>
+        <span class="error" id="wallet-error"></span>
+      </div>
       <nav>
         <button class="tab active" data-view="discovery">Discovery</button>
         <button class="tab" data-view="mcp">MCP tools</button>
@@ -40,18 +52,30 @@
 
         <ol id="task-events" class="timeline"></ol>
 
-        <div id="auth-panel" class="auth-panel" hidden>
+        <div id="task-auth" class="auth-panel" hidden>
           <h3>Authorization required</h3>
           <p class="note">
-            The agent has paused. It needs a Finance Data Officer credential presented over OID4VP
-            before it will prepare the payment export — role and organisation only, nothing else.
+            The agent has paused. It needs a Finance Data Officer credential presented over OID4VP before it will
+            prepare the payment export — role and organisation only, nothing else.
           </p>
-          <div class="auth-row">
-            <img id="auth-qr" alt="OID4VP request QR code" />
-            <div>
-              <p class="note">Scan with Heka Wallet, or:</p>
-              <button id="simulate">Simulate presentation (demo)</button>
-              <p class="note" id="simulate-note"></p>
+          <div class="auth-ways">
+            <div class="auth-way">
+              <h4>Send to the operator’s phone</h4>
+              <p class="note">
+                A DIDComm message to the linked Heka Wallet. The person taps <strong>Share</strong> there.
+              </p>
+              <button id="task-send" class="auth-primary" data-send="task">Send to wallet</button>
+              <div class="delivery" id="task-delivery"></div>
+            </div>
+            <div class="auth-way">
+              <h4>Or scan with Heka Wallet</h4>
+              <div class="qr" id="task-qr" aria-label="OID4VP request QR code"></div>
+              <div class="uri"><code id="task-uri"></code><button data-copy="task-uri">Copy</button></div>
+            </div>
+            <div class="auth-way auth-secondary">
+              <h4>Or, without a phone</h4>
+              <button id="task-simulate">Simulate presentation (demo)</button>
+              <p class="note" id="task-simulate-note"></p>
             </div>
           </div>
         </div>
@@ -62,22 +86,35 @@
       <section id="mcp" class="view">
         <h2>Acme Invoice Data — MCP tools</h2>
         <p class="note">
-          The same credential, a second protocol. Routine data flows freely; the sensitive tool
-          demands a scope, and the scope is only granted against a verified presentation.
+          The same credential, a second protocol. Routine data flows freely; the sensitive tool demands a scope, and the
+          scope is only granted against a verified presentation.
           <span id="token-status" class="badge"></span>
         </p>
+        <p class="mcp-engaged" id="mcp-engaged" hidden></p>
 
         <div id="tools" class="cards"></div>
 
         <div id="mcp-auth" class="auth-panel" hidden>
           <h3 id="mcp-auth-title">Authorization required</h3>
           <p class="note" id="mcp-auth-message"></p>
-          <div class="auth-row">
-            <img id="mcp-qr" alt="OID4VP request QR code" />
-            <div>
-              <p class="note">Scan with Heka Wallet, or:</p>
+          <div class="auth-ways">
+            <div class="auth-way">
+              <h4>Send to the operator’s phone</h4>
+              <p class="note">
+                A DIDComm message to the linked Heka Wallet. The person taps <strong>Share</strong> there.
+              </p>
+              <button id="mcp-send" class="auth-primary" data-send="mcp">Send to wallet</button>
+              <div class="delivery" id="mcp-delivery"></div>
+            </div>
+            <div class="auth-way">
+              <h4>Or scan with Heka Wallet</h4>
+              <div class="qr" id="mcp-qr" aria-label="OID4VP request QR code"></div>
+              <div class="uri"><code id="mcp-uri"></code><button data-copy="mcp-uri">Copy</button></div>
+            </div>
+            <div class="auth-way auth-secondary">
+              <h4>Or, without a phone</h4>
               <button id="mcp-simulate">Simulate presentation (demo)</button>
-              <p class="note" id="mcp-auth-note"></p>
+              <p class="note" id="mcp-simulate-note"></p>
             </div>
           </div>
         </div>
@@ -101,6 +138,7 @@
       <div id="drawer-body"></div>
     </aside>
 
+    <script src="./vendor/qrcode-generator.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

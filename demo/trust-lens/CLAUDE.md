@@ -6,8 +6,8 @@ Orientation for an agent picking this up. Humans should start with
 ## What this is
 
 A demo arguing that decentralized identity closes two trust gaps in multi-agent ecosystems:
-verifying *who published* a discovered resource, and tying a sensitive step to *a human with a
-role*. It is a demonstration, not a product — but the trust model is real and must stay correct.
+verifying _who published_ a discovered resource, and tying a sensitive step to _a human with a
+role_. It is a demonstration, not a product — but the trust model is real and must stay correct.
 
 Read in this order: [docs/GOAL.md](docs/GOAL.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) →
 [docs/OPERATIONS.md](docs/OPERATIONS.md). The ADRs in [spec/](spec/) hold the decisions and the
@@ -17,12 +17,12 @@ evidence behind them.
 
 Project skills cover the operational work. Prefer them over improvising:
 
-| Skill | Use when |
-|---|---|
-| `run-demo` | bringing the stack up |
-| `demo-walkthrough` | running or verifying the scenario |
-| `wallet-flow` | anything involving the emulator or Heka Wallet |
-| `troubleshoot` | something is broken |
+| Skill              | Use when                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| `run-demo`         | bringing the stack up                                                                              |
+| `demo-walkthrough` | running or verifying the scenario                                                                  |
+| `wallet-flow`      | anything involving the emulator or Heka Wallet — linking it, sending it the offer and the requests |
+| `troubleshoot`     | something is broken                                                                                |
 
 ## Invariants
 
@@ -44,7 +44,7 @@ rather than working around it.
   open-source publication under Heka.
 - **`src/core` stays dependency-light.** No Credo, no Express, no Heka client. External
   capabilities are injected, which is what keeps every verdict unit-testable without a network.
-- **Comments explain *why*.** The what is in the code. Non-obvious constraints — a spec
+- **Comments explain _why_.** The what is in the code. Non-obvious constraints — a spec
   requirement, an upstream quirk, a deliberate trade-off — belong in a comment; anything larger
   belongs in an ADR.
 - **Tests are the verdict table.** Adding a verdict means adding its case in
@@ -83,6 +83,9 @@ The full stack plus an emulator plus the registry does not fit in 16 GB. Run wha
   directly, which changes nothing about trust.
 - **The MCP transport is simplified** — plain HTTP with the spec's OAuth semantics rather than the
   streamable-HTTP MCP transport. The authorization story is faithful.
+- **The wallet connection is forged, not negotiated.** `src/shared/wallet-link.ts` saves a
+  `Completed` connection record pointing at the wallet's public `did:peer:2` and sends basic
+  messages to it, as the reference demo does. Real DID Exchange waits on the wallet.
 - **Development keys are committed** (Hedera operator, demo access token). Replace before any
   real deployment.
 - **`demo/a2a-oid4vp` carries known debt** — the reference demo this one builds on. Several of its

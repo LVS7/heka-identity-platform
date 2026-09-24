@@ -24,6 +24,9 @@ services:
       EXPRESS_PORT: ${EXPRESS_PORT:-3000}
       AGENT_HTTP_ENDPOINT: ${AGENT_HTTP_EP:-http://${HOST_IP:-172.17.0.1}:3001}
       AGENT_WS_ENDPOINT: ${AGENT_WS_EP:-ws://${HOST_IP:-172.17.0.1}:3002}
+      # Advertised OID4VCI/OID4VP base URL. Set AGENT_OID4VCI_EP=http://<LAN-IP>:3003 so a phone or
+      # emulator can reach offers and requests without adb port reverses (see demo/trust-lens).
+      AGENT_OID4VCI_ENDPOINT: ${AGENT_OID4VCI_EP:-http://localhost:3003}
     ports:
       - '3000:3000'
       - '3001:3001'

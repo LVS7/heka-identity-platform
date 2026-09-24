@@ -227,6 +227,10 @@ async function createAndProvisionCredoAgent(): Promise<{
 }
 
 function confirmAction(rl: readline.Interface, description: string): Promise<boolean> {
+  if (process.env.AUTO_CONFIRM === '1') {
+    console.log(`${description}\n[auto-confirmed]`)
+    return Promise.resolve(true)
+  }
   return new Promise((resolve) => {
     rl.question(`${description}\nPlease confirm the action (yes / no): `, (answer) => {
       resolve(answer.toLowerCase() === 'yes')

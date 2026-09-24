@@ -11,7 +11,7 @@ export function createCredoAgent(agentName: string, inboundPort: number = 3010):
 
   const agent = new CredoAgent({
     config: {
-      logger: new ConsoleLogger(LogLevel.info),
+      logger: new ConsoleLogger(process.env.CREDO_LOG_DEBUG === '1' ? LogLevel.debug : LogLevel.info),
       allowInsecureHttpUrls: true,
     },
     dependencies: agentDependencies,
@@ -24,7 +24,12 @@ export function createCredoAgent(agentName: string, inboundPort: number = 3010):
           database: {
             type: 'sqlite',
             config: {
+              // In-memory SQLite is per-connection: with a pool >1, the connection that
+              // provisions the schema differs from the one that reads it, causing
+              // "no such table: profiles". Pin to a single shared connection.
               inMemory: true,
+              maxConnections: 1,
+              minConnections: 1,
             },
           },
         },

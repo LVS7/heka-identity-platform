@@ -137,6 +137,19 @@ class DemoAgentExecutor implements AgentExecutor {
     const prepareWalletResponse = await this.identityServiceApi.post('/prepare-wallet')
 
     this.verifierDid = prepareWalletResponse.data.did
+
+    // DIAGNOSTIC: observe the notification channel
+    this.notificationWebSocket.on('open', () => console.log('[WS] notifications OPEN'))
+    this.notificationWebSocket.on('error', (e: unknown) => console.log('[WS] ERROR:', (e as Error)?.message))
+    this.notificationWebSocket.on('close', (c: number) => console.log('[WS] CLOSE code=', c))
+    this.notificationWebSocket.on('message', (d: Buffer) => {
+      try {
+        const m = JSON.parse(d.toString())
+        console.log('[WS] event type=', m.type, 'state=', m.verificationSession?.state, 'id=', m.verificationSession?.id)
+      } catch {
+        console.log('[WS] non-json message')
+      }
+    })
   }
 
   public cancelTask = async (taskId: string, eventBus: ExecutionEventBus): Promise<void> => {
@@ -351,11 +364,12 @@ class DemoAgentExecutor implements AgentExecutor {
     const { verificationSession, authorizationRequest: request_uri } = verificationSessionResponse.data
 
     this.verificationSessionContextMap.set(verificationSession.id, contextId)
+    console.log('[AUTH] verification session created id=', verificationSession.id, 'context=', contextId)
 
     return { request_uri, client_id: 'demo-client-id' }
   }
 
-  private async waitForContextAuthorization(contextId: string, timeoutMs: number = 30000): Promise<void> {
+  private async waitForContextAuthorization(contextId: string, timeoutMs: number = 180000): Promise<void> {
     return new Promise((resolve, reject) => {
       setTimeout(() => reject('Authorization timeout exceeded.'), timeoutMs)
       this.notificationWebSocket.on('message', (notificationMessageData: Buffer) => {

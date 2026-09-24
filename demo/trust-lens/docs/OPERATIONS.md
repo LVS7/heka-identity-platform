@@ -12,8 +12,8 @@ during development — none of it is speculative.
 | Acme Invoice Agent    | 10003                     | A2A path                |
 | Authorization Server  | 4300                      | MCP path                |
 | MCP server            | 4400                      | MCP path                |
-| Trust Lens            | 4000                      | the UI                  |
-| TrustCo Console       | 4100                      | revocation              |
+| Trust Lens            | 4000 (+4010 DIDComm)      | the UI                  |
+| TrustCo Console       | 4100 (+4110 DIDComm)      | revocation, offers      |
 
 Start order matters in one place: **the Identity Service must be up and healthy before `yarn
 seed`**, and before the agent or AS start (both call `prepare-wallet` at boot).
@@ -67,18 +67,52 @@ the Trust Lens (for its simulated holder).
 ### `session expired` when presenting
 
 The OID4VP verification session expires after Credo's default window, and Heka's API does not
-expose `expirationInSeconds` to lengthen it. A slow scan fails.
+expose `expirationInSeconds` to lengthen it. A slow tap fails.
 
-Present promptly. On an emulator, deliver the request by deep link rather than camera:
+Have the wallet unlocked and in the foreground before pressing **Send to wallet**, then tap Share
+as soon as the Proof Request appears. Nothing is corrupted — **Resend to wallet** or engage again.
 
-```bash
-adb shell am start -a android.intent.action.VIEW -d '<openid4vp://…>' com.heka.wallet
-```
+### `no wallet linked`
 
-The same works for the credential offer `yarn seed` prints. Keep the **single quotes**: `adb shell`
-runs the command through a shell on the device, and an unquoted `&` truncates the URI. The wallet
-then reports `Missing required 'redirect_uri' or 'response_uri'`, which looks like a malformed
-request rather than a quoting mistake.
+The send buttons need the wallet's public DID. Paste it (the `Public DID: did:peer:…` line the
+wallet logs after the PIN — React Native DevTools, or `adb logcat -d -s ReactNativeJS`) into the
+header of the Trust Lens or the Console. The link is stored in `.wallet-link.json` and shared by both.
+
+### Sent, but nothing appears on the phone
+
+The Trust Lens reported _Sent_, the audit says delivered, the wallet shows nothing. In order of
+likelihood:
+
+- **The wallet is in the background** or still on the PIN screen. It picks messages up from the
+  mediator only while running in the foreground; bring it up and the request appears.
+- **The DID is from a previous install.** Reinstalling or resetting the wallet mints a new
+  `did:peer:2`; the old one still resolves, so delivery "succeeds" into a mailbox nobody reads.
+  Re-link with the DID the current install logs.
+- **No internet on one side.** The message goes through the wallet's cloud mediator
+  (`did:web:mediator.dev.paradym.id`); both the Trust Lens host and the device need to reach it.
+- **The request arrived and the wallet rejected it** — check the wallet log for
+  `Missing required 'redirect_uri' or 'response_uri'` or `session expired`.
+
+Evidence of delivery on the sender side is the `[wallet-link] delivered …` log line; on the
+receiver side, the wallet's log shows the request being resolved.
+
+### `no did-communication service` when linking
+
+The pasted value is not a wallet DID. Credo 0.7 delivers only to `did-communication` (or
+`IndyAgent`) services and silently drops the DIDComm v2 `DIDCommMessaging` type; the link step
+checks so the failure has a name instead of surfacing later as `Message is undeliverable`.
+
+### The device cannot reach Heka (`Network request failed` in the wallet)
+
+Heka advertises `http://localhost:3003` unless told otherwise, and on the device that is the
+device. Either advertise the host's LAN address —
+`AGENT_OID4VCI_EP=http://<LAN-IP>:3003 docker compose -f docker-compose.dev.yml up -d heka-identity-service`
+in the Identity Service folder (no re-seed: offers and requests are minted on demand) — or, for
+an emulator only, `adb reverse tcp:3003 tcp:3003`. Re-creating the container drops the agent's
+notification WebSocket; the agent reconnects by itself and also polls the session as a fallback,
+so nothing needs restarting. Heka logs `Notification delivery failed` in the meantime, which is
+harmless. After switching networks the LAN address
+changes: repeat.
 
 ### `no presentation was received in time`
 
