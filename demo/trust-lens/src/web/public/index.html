@@ -26,6 +26,7 @@
       </div>
       <nav>
         <button class="tab active" data-view="discovery">Discovery</button>
+        <button class="tab" data-view="tasks">Tasks</button>
         <button class="tab" data-view="mcp">MCP tools</button>
         <button class="tab" data-view="audit">Audit</button>
       </nav>
@@ -45,20 +46,30 @@
         <p id="empty" class="empty">Search the registry to discover published resources.</p>
       </section>
 
+      <section id="tasks" class="view">
+        <h2>Engagements</h2>
+        <p class="note">Every task started with an agent, newest first, and who authorized its sensitive step.</p>
+        <div id="tasks-list" class="cards"></div>
+        <p id="tasks-empty" class="empty">No agent engaged yet — verify a resource on Discovery and press Engage.</p>
+      </section>
+
       <section id="task" class="view">
-        <button id="task-back" class="tab">&larr; Back to discovery</button>
+        <button id="task-back" class="tab">&larr; Back to tasks</button>
         <h2 id="task-title"></h2>
         <p class="note" id="task-context"></p>
 
         <ol id="task-events" class="timeline"></ol>
 
         <div id="task-auth" class="auth-panel" hidden>
-          <h3>Authorization required</h3>
+          <h3 id="task-auth-title">Authorization required</h3>
           <p class="note">
             The agent has paused. It needs a Finance Data Officer credential presented over OID4VP before it will
             prepare the payment export — role and organisation only, nothing else.
           </p>
-          <div class="auth-ways">
+          <div class="asked" id="task-asked"></div>
+          <ol class="steps" id="task-steps"></ol>
+          <p class="countdown" id="task-countdown"></p>
+          <div class="auth-ways" id="task-ways">
             <div class="auth-way">
               <h4>Send to the operator’s phone</h4>
               <p class="note">
@@ -80,6 +91,7 @@
           </div>
         </div>
 
+        <div id="task-presentation"></div>
         <pre id="task-result" class="result" hidden></pre>
       </section>
 
@@ -98,7 +110,10 @@
         <div id="mcp-auth" class="auth-panel" hidden>
           <h3 id="mcp-auth-title">Authorization required</h3>
           <p class="note" id="mcp-auth-message"></p>
-          <div class="auth-ways">
+          <div class="asked" id="mcp-asked"></div>
+          <ol class="steps" id="mcp-steps"></ol>
+          <p class="countdown" id="mcp-countdown"></p>
+          <div class="auth-ways" id="mcp-ways">
             <div class="auth-way">
               <h4>Send to the operator’s phone</h4>
               <p class="note">
@@ -120,6 +135,7 @@
           </div>
         </div>
 
+        <div id="mcp-presentation"></div>
         <pre id="mcp-result" class="result" hidden></pre>
       </section>
 

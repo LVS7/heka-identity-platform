@@ -269,15 +269,6 @@ async function toggleRevocation(button) {
 
 // ---------- activity ----------
 
-function renderEvidence(evidence) {
-  if (!evidence || typeof evidence !== 'object') return ''
-  const rows = Object.entries(evidence)
-    .filter(([, value]) => value !== undefined && typeof value !== 'object')
-    .map(([key, value]) => `<div><span>${escapeHtml(key)}</span><code>${escapeHtml(String(value))}</code></div>`)
-    .join('')
-  return rows ? `<div class="kv compact">${rows}</div>` : ''
-}
-
 async function loadActivity() {
   let data
   try {
@@ -299,7 +290,7 @@ async function loadActivity() {
         (event) => `<li class="${tone(event)}">
           <div class="when">${escapeHtml(ui.formatWhen(event.timestamp))} · ${escapeHtml(event.type)}</div>
           <strong>${escapeHtml(event.subject)}</strong> — ${escapeHtml(event.outcome)}
-          ${renderEvidence(event.evidence)}
+          ${ui.renderEvidence(event.evidence)}
         </li>`
       )
       .join('') || '<li class="note">Nothing recorded yet.</li>'

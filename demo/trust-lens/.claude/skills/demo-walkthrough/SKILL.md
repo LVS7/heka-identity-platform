@@ -60,8 +60,9 @@ curl -s -X POST http://localhost:4000/api/engage -H "content-type: application/j
   -d '{"identifier":"urn:air:acme-invoices.example:finance:invoice-agent"}'
 ```
 
-Poll `GET /api/task/<id>`. Expect `working` → `working` → **`auth-required`**, with
-`authorizationRequest` set.
+Poll `GET /api/task/<id>`. Expect `working` → `working` → **`auth-required`**, with `a2a.taskId`,
+`a2a.contextId` and an `authorization` block: `state: "requested"`, `expiresAt` about 180 s ahead,
+`requested.claims: ["role", "org"]`, `requested.credentialType: "urn:heka:role-credential:v1"`.
 
 Present the credential — from the real wallet, or the in-process holder:
 
@@ -75,6 +76,12 @@ The first needs a linked wallet (`GET /api/wallet` → `linked: true`; see `wall
 
 Then expect `working` → `completed` with the payment export, ending
 "Export authorized by a verified Finance Data Officer presentation."
+
+The events include `The wallet fetched the request.` (real wallet) and `Presentation verified;
+checking the credential's status.`; the task's `presentation` has `outcome: "authorized"`,
+`claims.role`, `issuer`, `holder`, `status.revoked: false`, `vpToken` and `source` —
+`"simulated"` for the in-process holder, `"wallet"` after Send to wallet, `"qr"` for a scan.
+`GET /api/tasks` lists every engagement, newest first.
 
 ⚠️ Present promptly: the verification session expires after Credo's default window, and the agent
 gives up after 180s.
@@ -100,13 +107,17 @@ Expect `ok: false`, status `401`, `requiredScope: suppliers:export`, and an `aut
 Present (`POST /api/mcp/send-to-wallet` for the linked wallet, or `POST /api/mcp/simulate-presentation`), then:
 
 ```bash
-curl -s http://localhost:4000/api/mcp/authorization   # granted: true, TTL ~300s
+curl -s http://localhost:4000/api/mcp/authorization   # pending: session.state; granted: true, TTL ~300s, presentation.source
 curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application/json" \
   -d '{"tool":"suppliers-export-bank-details"}'
 ```
 
 Expect bank details plus `authorizedBy: { role: "Finance Data Officer", org: "TrustCo …" }`. The
 resource server knows _who_ authorized — while knowing nothing about verifiable credentials.
+
+Invoking the sensitive tool again while a step-up is pending returns the same `authorization`
+(same QR); the AS logs a single `awaiting a presentation`. With nothing pending the poll answers
+`409`. The token-issued audit entry carries `evidence.presentation`; a denial carries it too.
 
 Worth pointing out when demonstrating: the AS log shows `aud=http://trustlens-mcp:4400` — the
 token is useless at any other resource (RFC 8707).
@@ -157,6 +168,10 @@ Every verification, refusal, authorization and denial, newest first, each with t
 rested on. Deliveries to the wallet appear as `authorization` entries — _delivered to the
 operator's wallet_ or _wallet delivery failed_ — because getting a request to a phone is a step,
 not a trust decision.
+
+Every `task completed after verified presentation`, `scoped token issued …` and `denial` entry
+carries `evidence.presentation`, with `source` saying whether a phone or the simulated holder
+presented — the Audit tab renders it as a card with **Raw VP**.
 
 ## Engaging the MCP entry from Discovery
 

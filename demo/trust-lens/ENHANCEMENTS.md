@@ -7,16 +7,15 @@ Two entries close gaps against the assignment and are therefore not optional in 
 the rest — they are marked. The full honest account of what the demo does and does not deliver is
 in [docs/GOAL.md](docs/GOAL.md); this file is about _how to close_ what is open there.
 
-|     | Enhancement                                                                                                       | Closes an assignment gap |
-| --- | ----------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| 1   | [Non-repudiation](#non-repudiation)                                                                               | **yes**                  |
-| 2   | [Registry ingestion](#registry-ingestion)                                                                         | **yes**                  |
-| 3   | [Finish a pending authorization instead of orphaning it](#finish-a-pending-authorization-instead-of-orphaning-it) | no                       |
-| 4   | [Stage the six verdicts nobody can see](#stage-the-six-verdicts-nobody-can-see)                                   | no                       |
-| 5   | [Widen the presentation window](#widen-the-presentation-window)                                                   | no                       |
-| 6   | [Run typecheck and tests on every change](#run-typecheck-and-tests-on-every-change)                               | no                       |
-| 7   | [Show the wallet's public DID in the wallet](#show-the-wallets-public-did-in-the-wallet)                          | no                       |
-| 8   | [Drop the inbound DIDComm transport](#drop-the-inbound-didcomm-transport)                                         | no                       |
+|     | Enhancement                                                                              | Closes an assignment gap |
+| --- | ---------------------------------------------------------------------------------------- | ------------------------ |
+| 1   | [Non-repudiation](#non-repudiation)                                                      | **yes**                  |
+| 2   | [Registry ingestion](#registry-ingestion)                                                | **yes**                  |
+| 3   | [Stage the six verdicts nobody can see](#stage-the-six-verdicts-nobody-can-see)          | no                       |
+| 4   | [Widen the presentation window](#widen-the-presentation-window)                          | no                       |
+| 5   | [Run typecheck and tests on every change](#run-typecheck-and-tests-on-every-change)      | no                       |
+| 6   | [Show the wallet's public DID in the wallet](#show-the-wallets-public-did-in-the-wallet) | no                       |
+| 7   | [Drop the inbound DIDComm transport](#drop-the-inbound-didcomm-transport)                | no                       |
 
 ---
 
@@ -33,14 +32,13 @@ to an audit log with the evidence it rested on, and refusals are recorded rather
 - The log lives in process memory. Restarting the Trust Lens erases it. This was not theoretical:
   a restart during a walkthrough took the whole A2A run with it.
 - Nothing is signed. An audit record that anyone can rewrite proves nothing to a third party.
-- The verifiable presentation is discarded once verified. The one artifact that carries the
-  holder's own signature — the thing that makes a claim undeniable — is thrown away at the exact
-  moment it becomes evidence.
+- The verifiable presentation is now retained — claims, issuer, holder, status check and the
+  compact VP travel with the decision into the audit — but only in memory, alongside the log.
 
-**What it takes.** Persist the log; retain the compact VP alongside the decision that relied on
-it; sign each record with the relying party's key so the chain can be checked later by someone who
-was not there. None of this is large — `src/core/audit.ts` is already an append-only structure, so
-the shape is right and only the durability and the signature are absent.
+**What it takes.** Persist the log with the presentations it already holds; sign each record with
+the relying party's key so the chain can be checked later by someone who was not there. Neither is
+large — `src/core/audit.ts` is already an append-only structure, so the shape is right and only the
+durability and the signature are absent.
 
 **What it buys.** The difference between "our system says it checked" and "here is the holder's
 signature over the claim, and here is our countersigned record of acting on it". Only the second
@@ -69,21 +67,6 @@ bug worth reporting) or pinning a release where it holds together. Then the adap
 **What it buys.** Realism, not trust. Every verdict re-fetches from the publisher regardless — the
 registry cannot change an outcome, which is the invariant the demo is built on. What it would
 prove is that the trust layer composes with a directory somebody else wrote.
-
----
-
-## Finish a pending authorization instead of orphaning it
-
-**Why.** Calling a scoped tool while an authorization is already pending starts a second one and
-abandons the first. The flow still works — the client completes the exchange when polled — but the
-authorization server accumulates requests that will never be answered, and a viewer reading its log
-sees `awaiting a presentation` lines that look like failures and are not.
-
-**What it takes.** In `callTool`, check for a pending grant and try to complete it before starting
-a fresh step-up.
-
-**What it buys.** The log stops lying about what happened, and the order of client calls stops
-mattering.
 
 ---
 

@@ -17,12 +17,12 @@ import { AuditLog } from '../core/audit'
 import { AiCatalog, AiCatalogEntry, Verdict } from '../core/types'
 import { verifyEntry } from '../core/verify'
 import { createVerifierAgent, verifierDependencies, VerifierAgent } from '../shared/credential-verifier'
-import { ACME_DOMAIN, PRO_DOMAIN } from '../shared/demo-config'
+import { ACME_DOMAIN, PRO_DOMAIN, TRUSTCO } from '../shared/demo-config'
 import { identityServiceFromEnv } from '../shared/identity-service'
 import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
 import { credoWalletTransport } from '../shared/wallet-link-credo'
 import { loadState } from '../seed/state'
-import { McpClient, PendingAuthorization } from './mcp-client'
+import { AuthorizationDeniedError, McpClient } from './mcp-client'
 import { TaskTracker } from './tasks'
 import { deliverToWallet } from './wallet-delivery'
 
@@ -100,7 +100,6 @@ function main() {
     transport: () => credoWalletTransport({ label: 'trust-lens-wallet-link', inboundPort: DIDCOMM_PORT }),
   })
   let verifierReady: Promise<VerifierAgent> | undefined
-  let pendingAuthorization: PendingAuthorization | undefined
 
   /**
    * The verifier agent is brought up on first use; a stand that never verifies pays nothing for it.
@@ -130,6 +129,7 @@ function main() {
   app.get('/api/config', (_req, res) => {
     res.json({
       trustedIssuers: [state.issuerDid],
+      trustedIssuerName: TRUSTCO.name,
       publishers: PUBLISHERS,
       registry: process.env.REGISTRY_URL ?? null,
       wallet: walletLink.status,
@@ -267,10 +267,28 @@ function main() {
     res.json(task)
   })
 
+  /** Every engagement this process has seen, newest first — enough for a list; open one for the rest. */
+  app.get('/api/tasks', (_req, res) => {
+    res.json({
+      tasks: tasks.list().map(({ id, resource, state, startedAt, a2a, presentation }) => ({
+        id,
+        resource,
+        state,
+        startedAt,
+        a2a,
+        presentation: presentation && {
+          outcome: presentation.outcome,
+          claims: presentation.claims,
+          source: presentation.source,
+        },
+      })),
+    })
+  })
+
   /** Push the pending OID4VP request to the operator's phone over DIDComm. */
   app.post('/api/task/:id/send-to-wallet', async (req, res) => {
     const task = tasks.get(req.params.id)
-    if (!task?.authorizationRequest) {
+    if (!tasks.awaitingPresentation(task)) {
       res.status(409).json({ error: 'this task is not waiting for an authorization' })
       return
     }
@@ -290,7 +308,7 @@ function main() {
    */
   app.post('/api/task/:id/simulate-presentation', async (req, res) => {
     const task = tasks.get(req.params.id)
-    if (!task?.authorizationRequest) {
+    if (!tasks.awaitingPresentation(task)) {
       res.status(409).json({ error: 'this task is not waiting for an authorization' })
       return
     }
@@ -337,16 +355,20 @@ function main() {
         }
       )
 
-      pendingAuthorization = await mcp.beginAuthorization(outcome)
+      const pending = await mcp.beginAuthorization(outcome)
       res.json({
         ok: false,
         status: outcome.status,
         requiredScope: outcome.requiredScope,
         authorization: {
-          request: pendingAuthorization.authorizationRequest,
-          message: pendingAuthorization.message,
-          scope: pendingAuthorization.scope,
-          resource: pendingAuthorization.resource,
+          request: pending.authorizationRequest,
+          message: pending.message,
+          scope: pending.scope,
+          resource: pending.resource,
+          session: pending.session,
+          requested: pending.requested,
+          source: pending.source,
+          delivery: pending.delivery,
         },
       })
     } catch (error) {
@@ -356,7 +378,8 @@ function main() {
 
   /** Push the AS's OID4VP request to the operator's phone over DIDComm. */
   app.post('/api/mcp/send-to-wallet', async (_req, res) => {
-    if (!pendingAuthorization) {
+    const pending = mcp.pending
+    if (!pending) {
       res.status(409).json({ error: 'no authorization is in progress' })
       return
     }
@@ -365,60 +388,70 @@ function main() {
       return
     }
 
-    pendingAuthorization.delivery = await deliverToWallet({
-      subject: `MCP · ${pendingAuthorization.scope}`,
-      content: pendingAuthorization.authorizationRequest,
+    pending.source = 'wallet'
+    pending.delivery = await deliverToWallet({
+      subject: `MCP · ${pending.scope}`,
+      content: pending.authorizationRequest,
       deliver: (content) => walletLink.send(content),
       audit,
-      previous: pendingAuthorization.delivery,
+      previous: pending.delivery,
     })
-    res
-      .status(pendingAuthorization.delivery.state === 'sent' ? 200 : 502)
-      .json({ delivery: pendingAuthorization.delivery })
+    res.status(pending.delivery.state === 'sent' ? 200 : 502).json({ delivery: pending.delivery })
   })
 
-  /** Present the officer credential to the AS from the in-process holder. */
+  /**
+   * Present the officer credential to the AS from the in-process holder. Labelled as simulated in
+   * the UI and in the audit, exactly as the A2A route is — who presented is the subject of the demo.
+   */
   app.post('/api/mcp/simulate-presentation', async (_req, res) => {
-    if (!pendingAuthorization) {
+    const pending = mcp.pending
+    if (!pending) {
       res.status(409).json({ error: 'no authorization is in progress' })
       return
     }
 
     try {
-      await tasks.presentToAuthorizationServer(pendingAuthorization.authorizationRequest)
+      // Set before presenting: the next poll may land before `present` returns.
+      pending.source = 'simulated'
+      await tasks.presentToAuthorizationServer(pending.authorizationRequest)
+      audit.record('authorization', `MCP · ${pending.scope}`, 'presentation submitted (simulated holder)', {
+        note: 'in-process holder, not the operator’s phone',
+      })
       res.json({ ok: true })
     } catch (error) {
       res.status(500).json({ error: (error as Error).message })
     }
   })
 
-  /** Poll the AS, exchange the code, and report whether a token was obtained. */
+  /** Poll the AS, exchange the code, and report whether a token was obtained — and against what. */
   app.get('/api/mcp/authorization', async (_req, res) => {
-    if (!pendingAuthorization) {
+    const pending = mcp.pending
+    if (!pending) {
       res.status(409).json({ error: 'no authorization is in progress' })
       return
     }
 
     try {
-      const granted = await mcp.completeAuthorization(pendingAuthorization)
-      if (granted) {
-        audit.record(
-          'authorization',
-          `MCP · ${pendingAuthorization.scope}`,
-          'scoped token issued against a verified presentation',
-          {
-            ttlSeconds: mcp.tokenStatus.expiresInSeconds,
-            resource: pendingAuthorization.resource,
-          }
-        )
-        pendingAuthorization = undefined
+      const poll = await mcp.completeAuthorization()
+      if (poll.granted) {
+        audit.record('authorization', `MCP · ${pending.scope}`, 'scoped token issued against a verified presentation', {
+          ttlSeconds: mcp.tokenStatus.expiresInSeconds,
+          resource: pending.resource,
+          presentation: poll.presentation,
+        })
       }
-      res.json({ granted, token: mcp.tokenStatus, delivery: pendingAuthorization?.delivery })
+      res.json({
+        granted: poll.granted,
+        token: mcp.tokenStatus,
+        delivery: pending.delivery,
+        session: poll.session,
+        presentation: poll.presentation,
+      })
     } catch (error) {
       const message = (error as Error).message
-      audit.record('denial', 'MCP · authorization', message)
-      pendingAuthorization = undefined
-      res.status(403).json({ error: message })
+      const presentation = error instanceof AuthorizationDeniedError ? error.presentation : undefined
+      audit.record('denial', `MCP · ${pending.scope}`, message, presentation ? { presentation } : undefined)
+      res.status(403).json({ error: message, presentation })
     }
   })
 

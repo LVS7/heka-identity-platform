@@ -14,10 +14,15 @@
  * OAuth interaction it cannot complete on its own, so it surfaces it to the operator. That the
  * interaction happens to be an OID4VP presentation is entirely the authorization server's
  * business — which is the whole argument for composing them this way.
+ *
+ * What the AS says about the presentation afterwards (`session`, `presentation`) is a demo
+ * addition mirrored from the A2A extension; the client passes it through for display and audit.
  */
 
 import { createHash, randomBytes } from 'node:crypto'
 
+import { InTaskOpenId4VpAuthorizationResult, InTaskOpenId4VpRequested } from '../agent/extension'
+import { presentationFrom, PresentationSource, PresentationView } from './presentation'
 import { DeliveryState } from './wallet-delivery'
 
 export interface ToolCallOutcome {
@@ -37,9 +42,33 @@ export interface PendingAuthorization {
   redirectUri: string
   resource: string
   scope: string
+  startedAt: string
   message?: string
+  /** Where the verifier session is, as last reported by the AS (demo addition). */
+  session?: { id: string; state: string }
+  /** What the AS asks for, in plain fields (demo addition). */
+  requested?: InTaskOpenId4VpRequested
+  /** Which way the operator chose to present — known only on this side. */
+  source?: PresentationSource
   /** Last attempt to push the request to the operator's wallet, if any. */
   delivery?: DeliveryState
+}
+
+export interface AuthorizationPoll {
+  granted: boolean
+  session?: { id: string; state: string }
+  presentation?: PresentationView
+}
+
+/** The AS refused: a revoked or untrusted credential arrives here, with what was refused when known. */
+export class AuthorizationDeniedError extends Error {
+  public constructor(
+    message: string,
+    public readonly presentation?: PresentationView
+  ) {
+    super(message)
+    this.name = 'AuthorizationDeniedError'
+  }
 }
 
 const REDIRECT_URI = 'http://localhost:4000/oauth/callback'
@@ -55,12 +84,21 @@ function parseChallenge(header: string | null): Record<string, string> {
 export class McpClient {
   private accessToken?: string
   private tokenExpiresAt = 0
+  private pendingAuthorization?: PendingAuthorization
 
-  public constructor(private readonly serverUrl: string) {}
+  public constructor(
+    private readonly serverUrl: string,
+    private readonly fetchFn: typeof fetch = fetch
+  ) {}
 
   public get tokenStatus(): { present: boolean; expiresInSeconds: number } {
     const remaining = Math.max(0, Math.round((this.tokenExpiresAt - Date.now()) / 1000))
     return { present: Boolean(this.accessToken) && remaining > 0, expiresInSeconds: remaining }
+  }
+
+  /** The step-up in progress, if any. One at a time: a second Invoke joins it rather than orphaning it. */
+  public get pending(): PendingAuthorization | undefined {
+    return this.pendingAuthorization
   }
 
   public forgetToken(): void {
@@ -69,7 +107,7 @@ export class McpClient {
   }
 
   public async listTools(): Promise<Record<string, unknown>> {
-    const response = await fetch(`${this.serverUrl}/tools`)
+    const response = await this.fetchFn(`${this.serverUrl}/tools`)
     return (await response.json()) as Record<string, unknown>
   }
 
@@ -79,7 +117,7 @@ export class McpClient {
       headers.authorization = `Bearer ${this.accessToken}`
     }
 
-    const response = await fetch(`${this.serverUrl}/tools/${name}`, { method: 'POST', headers })
+    const response = await this.fetchFn(`${this.serverUrl}/tools/${name}`, { method: 'POST', headers })
     const body = await response.json().catch(() => ({}))
 
     if (response.ok) return { status: response.status, ok: true, body }
@@ -94,24 +132,31 @@ export class McpClient {
     }
   }
 
-  /** Begin a step-up: discover the AS, then start an authorization the operator must satisfy. */
+  /**
+   * Begin a step-up: discover the AS, then start an authorization the operator must satisfy.
+   * A step-up already pending for the same scope and resource is returned as is — the AS would
+   * otherwise accumulate requests nobody will ever answer.
+   */
   public async beginAuthorization(outcome: ToolCallOutcome): Promise<PendingAuthorization> {
     const metadataUrl = outcome.resourceMetadataUrl ?? `${this.serverUrl}/.well-known/oauth-protected-resource`
-    const resourceMetadata = (await (await fetch(metadataUrl)).json()) as {
+    const resourceMetadata = (await (await this.fetchFn(metadataUrl)).json()) as {
       resource: string
       authorization_servers: string[]
     }
+    const scope = outcome.requiredScope ?? 'suppliers:export'
+
+    const pending = this.pendingAuthorization
+    if (pending && pending.scope === scope && pending.resource === resourceMetadata.resource) return pending
 
     const authorizationServer = resourceMetadata.authorization_servers[0]
     const asMetadata = (await (
-      await fetch(`${authorizationServer}/.well-known/oauth-authorization-server`)
+      await this.fetchFn(`${authorizationServer}/.well-known/oauth-authorization-server`)
     ).json()) as { authorization_endpoint: string; token_endpoint: string }
 
     // PKCE: the verifier never leaves this process.
     const codeVerifier = randomBytes(32).toString('base64url')
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
 
-    const scope = outcome.requiredScope ?? 'suppliers:export'
     const authorizeUrl = new URL(asMetadata.authorization_endpoint)
     authorizeUrl.searchParams.set('client_id', CLIENT_ID)
     authorizeUrl.searchParams.set('response_type', 'code')
@@ -122,13 +167,15 @@ export class McpClient {
     // RFC 8707 — bind the token to this resource, so it is useless anywhere else.
     authorizeUrl.searchParams.set('resource', resourceMetadata.resource)
 
-    const started = (await (await fetch(authorizeUrl.toString())).json()) as {
+    const started = (await (await this.fetchFn(authorizeUrl.toString())).json()) as {
       requestId: string
       authorizationRequest: string
       message?: string
+      session?: { id: string; state: string }
+      requested?: InTaskOpenId4VpRequested
     }
 
-    return {
+    this.pendingAuthorization = {
       requestId: started.requestId,
       authorizationRequest: started.authorizationRequest,
       authorizeUrl: authorizeUrl.origin,
@@ -136,22 +183,56 @@ export class McpClient {
       redirectUri: REDIRECT_URI,
       resource: resourceMetadata.resource,
       scope,
+      startedAt: new Date().toISOString(),
       message: started.message,
+      session: started.session,
+      requested: started.requested,
     }
+    return this.pendingAuthorization
   }
 
   /**
-   * Ask the AS whether the presentation has landed. Returns false while still waiting; throws
-   * when the AS refuses (a revoked credential arrives here).
+   * Ask the AS whether the presentation has landed. `granted: false` while still waiting (with
+   * the session's state); throws `AuthorizationDeniedError` when the AS refuses (a revoked
+   * credential arrives here). Any outcome other than "still waiting" ends the pending step-up.
    */
-  public async completeAuthorization(pending: PendingAuthorization): Promise<boolean> {
-    const response = await fetch(`${pending.authorizeUrl}/authorize/${pending.requestId}`)
-    const body = (await response.json()) as { status?: string; code?: string; error_description?: string }
+  public async completeAuthorization(): Promise<AuthorizationPoll> {
+    const pending = this.pendingAuthorization
+    if (!pending) throw new Error('no authorization is in progress')
 
-    if (response.status === 403) throw new Error(body.error_description ?? 'authorization denied')
-    if (body.status !== 'granted' || !body.code) return false
+    try {
+      return await this.poll(pending)
+    } catch (error) {
+      this.pendingAuthorization = undefined
+      throw error
+    }
+  }
 
-    const tokenResponse = await fetch(`${pending.authorizeUrl}/token`, {
+  private async poll(pending: PendingAuthorization): Promise<AuthorizationPoll> {
+    const response = await this.fetchFn(`${pending.authorizeUrl}/authorize/${pending.requestId}`)
+    const body = (await response.json()) as {
+      status?: string
+      code?: string
+      error_description?: string
+      session?: { id: string; state: string }
+      presentation?: InTaskOpenId4VpAuthorizationResult
+    }
+
+    // A token that arrived with nothing pressed on this side was scanned from the QR.
+    const source = pending.source ?? 'qr'
+
+    if (response.status === 403) {
+      throw new AuthorizationDeniedError(
+        body.error_description ?? 'authorization denied',
+        body.presentation && presentationFrom(body.presentation, source)
+      )
+    }
+    if (body.status !== 'granted' || !body.code) {
+      if (body.session) pending.session = body.session
+      return { granted: false, session: pending.session }
+    }
+
+    const tokenResponse = await this.fetchFn(`${pending.authorizeUrl}/token`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -172,6 +253,11 @@ export class McpClient {
 
     this.accessToken = token.access_token
     this.tokenExpiresAt = Date.now() + (token.expires_in ?? 300) * 1000
-    return true
+    this.pendingAuthorization = undefined
+    return {
+      granted: true,
+      session: body.session ?? pending.session,
+      presentation: body.presentation && presentationFrom(body.presentation, source),
+    }
   }
 }

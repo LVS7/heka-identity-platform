@@ -33,6 +33,8 @@ import {
   StatusCheck,
   statusListOriginOf,
 } from '../shared/presented-credential'
+import { authorizedResult, deniedResult, requestedFromDefinition } from '../shared/authorization-result'
+import { InTaskOpenId4VpAuthorizationResult, InTaskOpenId4VpRequested } from '../agent/extension'
 
 dotenv.config()
 
@@ -85,6 +87,25 @@ const OFFICER_PRESENTATION_DEFINITION = {
   ],
 }
 
+/** The definition in plain fields for the client (demo addition, mirrored from the A2A extension). */
+const OFFICER_REQUESTED = requestedFromDefinition(OFFICER_PRESENTATION_DEFINITION)
+
+export type AuthorizationPoll =
+  | { state: 'pending'; session: { id: string; state: string } }
+  | {
+      state: 'granted'
+      session: { id: string; state: string }
+      code: string
+      redirectTo: string
+      presentation: InTaskOpenId4VpAuthorizationResult
+    }
+  | {
+      state: 'denied'
+      session: { id: string; state: string }
+      reason: string
+      presentation: InTaskOpenId4VpAuthorizationResult
+    }
+
 class AuthorizationServer {
   private readonly pending = new Map<string, PendingAuthorization>()
   private readonly codes = new Map<string, IssuedCode>()
@@ -133,7 +154,12 @@ class AuthorizationServer {
     state?: string
     scope: string
     resource: string
-  }): Promise<{ requestId: string; authorizationRequest: string }> {
+  }): Promise<{
+    requestId: string
+    authorizationRequest: string
+    session: { id: string; state: string }
+    requested: InTaskOpenId4VpRequested
+  }> {
     const session = await this.identityService.createVerificationSession({
       publicVerifierId: this.verifierDid,
       requestSigner: { method: 'did', did: this.verifierDid },
@@ -149,7 +175,12 @@ class AuthorizationServer {
     })
 
     console.log(`[as] authorization ${requestId.slice(0, 8)} awaiting a presentation`)
-    return { requestId, authorizationRequest: session.authorizationRequest }
+    return {
+      requestId,
+      authorizationRequest: session.authorizationRequest,
+      session: { id: session.verificationSession.id, state: session.verificationSession.state },
+      requested: OFFICER_REQUESTED,
+    }
   }
 
   public getPending(requestId: string): PendingAuthorization | undefined {
@@ -157,13 +188,13 @@ class AuthorizationServer {
   }
 
   /**
-   * Complete an authorization once the presentation has been verified.
+   * Answer a poll: how far the wallet has got, or the decision.
    *
    * Heka confirms the presentation is sound; whose credential it is, of what type, and whether
    * it is still live is this server's decision (src/shared/presented-credential.ts). Skipping
    * that would make the officer credential's revocation meaningless on this path.
    */
-  public async completeAuthorization(requestId: string): Promise<{ code: string; redirectTo: string }> {
+  public async pollAuthorization(requestId: string): Promise<AuthorizationPoll> {
     const authorization = this.pending.get(requestId)
     if (!authorization) throw new Error('unknown or expired authorization request')
 
@@ -173,13 +204,17 @@ class AuthorizationServer {
       throw new Error('no trusted issuer configured — run `yarn seed`')
     }
 
+    const session = await this.identityService.getVerificationSession(authorization.verificationSessionId)
+    // "Not yet" is a normal poll result and the request stays open; the client learns how far the wallet got.
+    if (session.state !== 'ResponseVerified') {
+      return { state: 'pending', session: { id: session.id, state: session.state } }
+    }
+
     // Possibly unset in the catch: a refusal logs the status pointer only when one was read.
     let presented: PresentedCredential | undefined
     let status: StatusCheck
     try {
-      presented = readPresentedCredential(
-        await this.identityService.getVerificationSession(authorization.verificationSessionId)
-      )
+      presented = readPresentedCredential(session)
       status = await assertPresentedCredentialValid(
         presented,
         {
@@ -192,27 +227,36 @@ class AuthorizationServer {
         fetch
       )
     } catch (error) {
-      // "Not yet" is a normal poll result and the request stays open. Any other refusal is a
-      // decision: the request is over, so a later poll cannot re-ask and get a different answer.
-      if (error instanceof PresentationRefused && error.reason !== 'not-verified') {
-        this.pending.delete(requestId)
-        if (error.reason === 'revoked' && presented?.credentialStatus) {
-          const { statusListIndex, statusListCredential } = presented.credentialStatus
-          console.log(`[as] status checked: index ${statusListIndex} on ${statusListCredential} -> revoked`)
-        }
-        if (error.reason === 'foreign-status-list' && presented?.credentialStatus) {
-          const origin = statusListOriginOf(presented.credentialStatus) ?? '(not a URL)'
-          console.log(`[as] status list origin ${origin} is not ${this.identityService.baseOrigin}`)
-        }
-        console.log(`[as] authorization ${requestId.slice(0, 8)} refused (${error.reason}): ${error.message}`)
+      if (!(error instanceof PresentationRefused)) throw error
+      // A refusal is a decision: the request is over, so a later poll cannot re-ask and get a different answer.
+      this.pending.delete(requestId)
+      if (error.reason === 'revoked' && presented?.credentialStatus) {
+        const { statusListIndex, statusListCredential } = presented.credentialStatus
+        console.log(`[as] status checked: index ${statusListIndex} on ${statusListCredential} -> revoked`)
       }
-      throw error
+      if (error.reason === 'foreign-status-list' && presented?.credentialStatus) {
+        const origin = statusListOriginOf(presented.credentialStatus) ?? '(not a URL)'
+        console.log(`[as] status list origin ${origin} is not ${this.identityService.baseOrigin}`)
+      }
+      console.log(`[as] authorization ${requestId.slice(0, 8)} refused (${error.reason}): ${error.message}`)
+      return {
+        state: 'denied',
+        session: { id: session.id, state: session.state },
+        reason: error.message,
+        presentation: deniedResult(session.id, error.message, presented, error.reason),
+      }
     }
 
     const { role, org } = presented.claims
     if (typeof role !== 'string' || typeof org !== 'string') {
       this.pending.delete(requestId)
-      throw new Error('the presentation did not disclose role and org')
+      const reason = 'the presentation did not disclose role and org'
+      return {
+        state: 'denied',
+        session: { id: session.id, state: session.state },
+        reason,
+        presentation: deniedResult(session.id, reason, presented),
+      }
     }
     const claims = { role, org }
 
@@ -226,7 +270,13 @@ class AuthorizationServer {
     if (authorization.state) redirectTo.searchParams.set('state', authorization.state)
 
     console.log(`[as] authorization ${requestId.slice(0, 8)} granted to ${claims.role}`)
-    return { code, redirectTo: redirectTo.toString() }
+    return {
+      state: 'granted',
+      session: { id: session.id, state: session.state },
+      code,
+      redirectTo: redirectTo.toString(),
+      presentation: authorizedResult(presented, status),
+    }
   }
 
   /** Exchange a code for an access token, verifying PKCE. */
@@ -306,7 +356,7 @@ async function main() {
     }
 
     try {
-      const { requestId, authorizationRequest } = await as.beginAuthorization({
+      const { requestId, authorizationRequest, session, requested } = await as.beginAuthorization({
         clientId: String(client_id ?? 'trust-lens'),
         redirectUri: String(redirect_uri),
         codeChallenge: String(code_challenge),
@@ -319,6 +369,9 @@ async function main() {
         requestId,
         interaction: 'openid4vp',
         authorizationRequest,
+        // Demo additions, mirrored from the A2A extension: where the wallet is, and what is asked.
+        session,
+        requested,
         message: `Present a ${OFFICER_CREDENTIAL.role} credential to authorize scope "${scope ?? SUPPLIERS_EXPORT_SCOPE}"`,
       })
     } catch (error) {
@@ -326,7 +379,7 @@ async function main() {
     }
   })
 
-  /** Poll: has the presentation arrived, and may we have the code? */
+  /** Poll: how far has the wallet got, and may we have the code? */
   app.get('/authorize/:requestId', async (req, res) => {
     if (!as.getPending(req.params.requestId)) {
       res.status(404).json({ error: 'invalid_request', error_description: 'unknown authorization request' })
@@ -334,16 +387,30 @@ async function main() {
     }
 
     try {
-      const { code, redirectTo } = await as.completeAuthorization(req.params.requestId)
-      res.json({ status: 'granted', code, redirectTo })
-    } catch (error) {
-      const message = (error as Error).message
-      // "not yet" is a normal poll result; a revocation is a decision.
-      if (message.includes('no verified presentation yet')) {
-        res.json({ status: 'pending' })
+      const poll = await as.pollAuthorization(req.params.requestId)
+      if (poll.state === 'pending') {
+        res.json({ status: 'pending', session: poll.session })
         return
       }
-      res.status(403).json({ error: 'access_denied', error_description: message })
+      if (poll.state === 'denied') {
+        res.status(403).json({
+          error: 'access_denied',
+          error_description: poll.reason,
+          session: poll.session,
+          presentation: poll.presentation,
+        })
+        return
+      }
+      res.json({
+        status: 'granted',
+        session: poll.session,
+        code: poll.code,
+        redirectTo: poll.redirectTo,
+        presentation: poll.presentation,
+      })
+    } catch (error) {
+      // Anything unexpected — Heka unreachable, no trust anchor — fails closed, as before.
+      res.status(403).json({ error: 'access_denied', error_description: (error as Error).message })
     }
   })
 

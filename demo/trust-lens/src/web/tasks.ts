@@ -3,7 +3,9 @@
  *
  * Streams a task with the agent and keeps the progress so the UI can poll it. When the agent
  * pauses in `auth-required`, the OID4VP request it carries is surfaced for the operator — pushed
- * to Heka Wallet over DIDComm, shown as a QR, or handed to the in-process simulated holder.
+ * to Heka Wallet over DIDComm, shown as a QR, or handed to the in-process simulated holder — and
+ * everything the agent says about the presentation afterwards (demo additions to the extension,
+ * see src/agent/extension.ts) is kept on the task and in the audit.
  */
 
 import { A2AClient } from '@a2a-js/sdk/client'
@@ -12,8 +14,10 @@ import { randomUUID } from 'node:crypto'
 
 import { AuditLog } from '../core/audit'
 import { IdentityServiceClient } from '../shared/identity-service'
+import { NO_PRESENTATION_IN_TIME } from '../shared/authorization-result'
 import { SimulatedWallet } from '../shared/simulated-wallet'
-import { IN_TASK_OID4VP_EXTENSION_URI } from '../agent/extension'
+import { IN_TASK_OID4VP_EXTENSION_URI, InTaskOpenId4VpMessageMetadata } from '../agent/extension'
+import { AuthorizationView, presentationFrom, PresentationView, sourceOf, toAuthorizationState } from './presentation'
 import { DeliveryState, deliverToWallet } from './wallet-delivery'
 
 export interface TaskEvent {
@@ -26,15 +30,73 @@ export interface TrackedTask {
   id: string
   resource: string
   state: string
+  startedAt: string
   events: TaskEvent[]
+  /** The agent's own identifiers, from the first stream event. */
+  a2a?: { taskId: string; contextId: string }
   /** The verification the Trust Lens ran at engagement time — the verdict the browser held is never trusted. */
   preflight?: { verdict: string; auditId: string; verifiedAt: string }
-  /** Present only while the agent is waiting for a presentation. */
-  authorizationRequest?: string
-  /** Last attempt to push the request to the operator's wallet, if any. */
-  delivery?: DeliveryState
+  /** From `auth-required` on; its state follows the verifier session, then the outcome. */
+  authorization?: AuthorizationView
+  /** What was verified (or refused), with the source only this side knows. */
+  presentation?: PresentationView
   result?: string
   error?: string
+}
+
+const FINAL_STATES = ['authorized', 'denied', 'expired']
+
+function extensionMetadata(update: TaskStatusUpdateEvent): InTaskOpenId4VpMessageMetadata | undefined {
+  return update.status.message?.metadata?.[IN_TASK_OID4VP_EXTENSION_URI] as InTaskOpenId4VpMessageMetadata | undefined
+}
+
+/**
+ * Fold one status update into the task. Pure — the audit side effects live in `consume` — and
+ * exported so the folding can be tested without an agent.
+ */
+export function applyStatusUpdate(task: TrackedTask, update: TaskStatusUpdateEvent): { text?: string } {
+  const text = update.status.message?.parts
+    ?.filter((part) => part.kind === 'text')
+    .map((part) => (part as { text: string }).text)
+    .join(' ')
+
+  task.state = update.status.state
+  task.events.push({ at: update.status.timestamp ?? new Date().toISOString(), state: update.status.state, text })
+
+  const metadata = extensionMetadata(update)
+  const status = metadata?.authorizationStatus
+  const result = metadata?.authorizationResult
+
+  if (update.status.state === 'auth-required' && metadata?.authorizationRequest) {
+    task.authorization = {
+      request: metadata.authorizationRequest.request_uri,
+      clientId: metadata.authorizationRequest.client_id,
+      sessionId: status?.sessionId,
+      state: status ? toAuthorizationState(status.state) : 'requested',
+      expiresAt: status?.expiresAt,
+      requested: status?.requested,
+    }
+  } else if (status && task.authorization && !FINAL_STATES.includes(task.authorization.state)) {
+    task.authorization.state = toAuthorizationState(status.state)
+    // The wallet moved and nobody pressed Send or Simulate here: the request was scanned.
+    if (task.authorization.state !== 'requested' && !task.authorization.source) task.authorization.source = 'qr'
+  }
+
+  if (update.status.state === 'completed') {
+    task.result = text
+    if (task.authorization) task.authorization.state = 'authorized'
+    if (result) task.presentation = presentationFrom(result, sourceOf(task.authorization, result))
+  }
+
+  if (update.status.state === 'failed') {
+    task.error = text
+    if (task.authorization) {
+      task.authorization.state = result?.reason === NO_PRESENTATION_IN_TIME ? 'expired' : 'denied'
+    }
+    if (result) task.presentation = presentationFrom(result, sourceOf(task.authorization, result))
+  }
+
+  return { text }
 }
 
 export class TaskTracker {
@@ -51,9 +113,28 @@ export class TaskTracker {
     return this.tasks.get(id)
   }
 
+  /** Newest first, like the audit: the engagement you just started is the one you look for. */
+  public list(): TrackedTask[] {
+    return [...this.tasks.values()].reverse()
+  }
+
+  /** True while the operator can still present against this task. */
+  public awaitingPresentation(
+    task: TrackedTask | undefined
+  ): task is TrackedTask & { authorization: AuthorizationView } {
+    return Boolean(task?.authorization && !FINAL_STATES.includes(task.authorization.state))
+  }
+
   public async start(resource: string, prompt: string, preflight?: TrackedTask['preflight']): Promise<TrackedTask> {
     const client = new A2AClient(this.agentUrl)
-    const task: TrackedTask = { id: randomUUID(), resource, state: 'submitted', events: [], preflight }
+    const task: TrackedTask = {
+      id: randomUUID(),
+      resource,
+      state: 'submitted',
+      startedAt: new Date().toISOString(),
+      events: [],
+      preflight,
+    }
     this.tasks.set(task.id, task)
 
     const message: Message = {
@@ -72,42 +153,42 @@ export class TaskTracker {
     try {
       for await (const event of client.sendMessageStream(params)) {
         if (event.kind === 'task') {
-          task.state = (event as Task).status.state
+          const agentTask = event as Task
+          task.state = agentTask.status.state
+          task.a2a = { taskId: agentTask.id, contextId: agentTask.contextId }
           continue
         }
         if (event.kind !== 'status-update') continue
 
         const update = event as TaskStatusUpdateEvent
-        const text = update.status.message?.parts
-          ?.filter((part) => part.kind === 'text')
-          .map((part) => (part as { text: string }).text)
-          .join(' ')
+        const { text } = applyStatusUpdate(task, update)
+        const state = update.status.state
 
-        task.state = update.status.state
-        task.events.push({ at: update.status.timestamp ?? new Date().toISOString(), state: update.status.state, text })
-
-        if (update.status.state === 'auth-required') {
-          const metadata = update.status.message?.metadata?.[IN_TASK_OID4VP_EXTENSION_URI] as
-            { authorizationRequest?: { request_uri?: string } } | undefined
-          task.authorizationRequest = metadata?.authorizationRequest?.request_uri
+        if (state === 'auth-required') {
           this.audit.record('authorization', task.resource, 'authorization requested', {
             step: text,
             via: 'OID4VP In-Task Auth extension',
+            sessionId: task.authorization?.sessionId,
           })
         }
 
-        if (update.status.state === 'completed') {
-          task.result = text
-          task.authorizationRequest = undefined
-          task.delivery = undefined
-          this.audit.record('authorization', task.resource, 'task completed after verified presentation')
+        // The presentation is the evidence: it goes into the audit with the decision it settled.
+        if (state === 'completed') {
+          this.audit.record(
+            'authorization',
+            task.resource,
+            'task completed after verified presentation',
+            task.presentation ? { presentation: task.presentation } : undefined
+          )
         }
 
-        if (update.status.state === 'failed') {
-          task.error = text
-          task.authorizationRequest = undefined
-          task.delivery = undefined
-          this.audit.record('denial', task.resource, text ?? 'task failed')
+        if (state === 'failed') {
+          this.audit.record(
+            'denial',
+            task.resource,
+            text ?? 'task failed',
+            task.presentation ? { presentation: task.presentation } : undefined
+          )
         }
       }
     } catch (error) {
@@ -118,15 +199,20 @@ export class TaskTracker {
   }
 
   /** Push the pending request to the operator's wallet; the outcome is kept on the task. */
-  public async sendToWallet(task: TrackedTask, deliver: (content: string) => Promise<void>): Promise<DeliveryState> {
-    task.delivery = await deliverToWallet({
+  public async sendToWallet(
+    task: TrackedTask & { authorization: AuthorizationView },
+    deliver: (content: string) => Promise<void>
+  ): Promise<DeliveryState> {
+    const { authorization } = task
+    authorization.source = 'wallet'
+    authorization.delivery = await deliverToWallet({
       subject: task.resource,
-      content: task.authorizationRequest as string,
+      content: authorization.request,
       deliver,
       audit: this.audit,
-      previous: task.delivery,
+      previous: authorization.delivery,
     })
-    return task.delivery
+    return authorization.delivery
   }
 
   /** Present the officer credential against any OID4VP request — the agent's or the AS's. */
@@ -136,10 +222,10 @@ export class TaskTracker {
     await this.wallet.present(authorizationRequest)
   }
 
-  public async simulatePresentation(task: TrackedTask): Promise<void> {
-    if (!this.wallet) this.wallet = new SimulatedWallet(this.identityService)
-    await this.wallet.initialize()
-    await this.wallet.present(task.authorizationRequest as string)
+  public async simulatePresentation(task: TrackedTask & { authorization: AuthorizationView }): Promise<void> {
+    // Set before presenting: the agent's next update may land before `present` returns.
+    task.authorization.source = 'simulated'
+    await this.presentToAuthorizationServer(task.authorization.request)
 
     this.audit.record('authorization', task.resource, 'presentation submitted (simulated holder)', {
       note: 'in-process holder, not the operator’s phone',

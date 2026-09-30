@@ -96,11 +96,13 @@ sequenceDiagram
     Note over Agent: The payment export is the sensitive step.
     Agent->>HIS: create verification session<br/>PEX asks for role + org, limit_disclosure
     HIS-->>Agent: request_uri + client_id
-    Agent-->>Lens: status-update auth-required<br/>metadata[extension].authorizationRequest
+    Agent-->>Lens: status-update auth-required<br/>metadata[extension].authorizationRequest<br/>+ authorizationStatus (demo addition)
     Op->>Lens: Send to wallet
     Lens->>W: DIDComm basic message carrying the request<br/>(or the operator scans the QR)
     W->>HIS: GET request_uri
     HIS-->>W: signed authorization request
+    HIS-->>Agent: RequestUriRetrieved, over WebSocket
+    Agent-->>Lens: status-update working "The wallet fetched the request."
     W-->>Op: shows exactly two claims — role, org
     Op->>W: Share
     W->>HIS: authorization response, VP over direct_post.jwt
@@ -109,10 +111,10 @@ sequenceDiagram
     Agent->>HIS: GET /credentials/status/:id
     Note over Agent,HIS: Heka's verifier confirms the presentation is sound but does not<br/>consult the status list — so the relying party does. Unreadable means refuse.
     alt credential still live
-        Agent-->>Lens: status-update completed + payment export
-        Lens-->>Op: result, naming who authorized it
+        Agent-->>Lens: status-update completed + payment export<br/>+ authorizationResult (demo addition)
+        Lens-->>Op: result and the presentation card — claims, issuer, holder, status, source
     else revoked by its issuer
-        Agent-->>Lens: status-update failed — authorization denied
+        Agent-->>Lens: status-update failed — authorization denied<br/>+ authorizationResult (outcome denied, reason)
     end
 ```
 
@@ -120,9 +122,11 @@ sequenceDiagram
 2. **In-task authentication request**: the agent works until the payment export, decides that step is sensitive, asks Heka for an OID4VP request and returns `auth-required` carrying it in `message.metadata[<extension URI>]`.
 3. **Wallet invocation**: the operator presses **Send to wallet** and the Trust Lens delivers the request to the linked Heka Wallet as a DIDComm basic message — the same mechanism as `demo/a2a-oid4vp`. A QR code and the raw URI are shown alongside for a phone with a camera.
 4. **Sharing the presentation**: the wallet fetches and verifies the request, shows exactly two claims — `role` and `org` — and submits the VP over `direct_post.jwt` only after the person taps Share.
-5. **Verification**: Heka validates the presentation and notifies the agent over WebSocket.
+5. **Verification**: Heka validates the presentation and notifies the agent over WebSocket. Each session state on the way (`RequestUriRetrieved`, `ResponseVerified`) is forwarded to the Trust Lens as a `working` update carrying `authorizationStatus`, so the step strip moves as the person acts.
 6. **Revocation check**: the agent then consults the status list itself, because Heka's verifier does not. An unreadable list means refuse.
-7. **Task execution**: the export is produced. The agent never learns _who_ the operator is — only that someone holding a Finance Data Officer credential approved this step, at this moment.
+7. **Task execution**: the export is produced, and `completed` carries `authorizationResult` — the disclosed claims, issuer, holder binding, the status check and the compact VP. The agent never learns _who_ the operator is — only that someone holding a Finance Data Officer credential approved this step, at this moment. The Trust Lens shows it as a card, keeps it on the task (the **Tasks** tab lists every engagement) and records it in the audit.
+
+**What the client learns about the presentation (demo addition).** The v1 In-Task Auth extension defines only `authorizationRequest`; nothing after it. This demo adds `authorizationStatus` (session id, Heka state, the agent's `expiresAt`, what is asked) and `authorizationResult` (outcome, claims, issuer, holder, status check, `vpToken`) under the same metadata key, labelled as such in `src/agent/extension.ts`. They travel in-band because the client must not read the verifier's session: fetching the `request_uri` from the Trust Lens would move it to `RequestUriRetrieved` and corrupt the signal. The source of a presentation (wallet, QR, simulated) is known only to the Trust Lens and is set there.
 
 Without a phone, **Simulate presentation** drives an in-process holder through the identical exchange.
 
@@ -150,7 +154,7 @@ sequenceDiagram
     Lens->>AS: GET /authorize — PKCE S256, scope=suppliers:export,<br/>resource indicator naming the MCP server, RFC 8707
     AS->>HIS: create verification session, same PEX the agent used
     HIS-->>AS: authorization request
-    AS-->>Lens: interaction openid4vp + authorizationRequest
+    AS-->>Lens: interaction openid4vp + authorizationRequest<br/>+ session, requested (demo addition)
     Op->>Lens: Send to wallet
     Lens->>W: DIDComm basic message carrying the request
     Op->>W: Share — the same officer credential
@@ -158,7 +162,7 @@ sequenceDiagram
     HIS-->>AS: ResponseVerified
     AS->>HIS: GET /credentials/status/:id — still live?
     Lens->>AS: GET /authorize/:requestId — polled since the request was issued
-    AS-->>Lens: authorization code, plus iss per RFC 9207
+    AS-->>Lens: authorization code, plus iss per RFC 9207<br/>+ presentation (demo addition); pending polls carry the session state
     Lens->>AS: POST /token — code, code_verifier, resource
     AS-->>Lens: access_token — ES256, aud = the MCP server, scope, role, org, 300 s
     Lens->>MCP: retry the call with the Bearer token
@@ -174,6 +178,8 @@ sequenceDiagram
 5. **Retry**: the original call succeeds and the resource server reports `authorizedBy`.
 
 The resource server never sees a credential, a DID or a presentation — it validates a JWT, exactly as any OAuth 2.1 resource server would. That is the point: the composition needs no bespoke wire format, so an ordinary MCP client still works. The audience binding is what makes it safe — the token is useless at any other resource.
+
+The poll answers mirror the A2A extension's demo additions: `pending` carries `session { id, state }`, `granted` and a `403` denial carry `presentation` — the same shape the agent emits — so the Trust Lens renders one card for both paths. A second Invoke while a step-up is pending joins it instead of starting another.
 
 ### Kill switches and audit
 
@@ -425,11 +431,13 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens) and **http://l
 2. **Verify all** → `VERIFIED`, `VERIFIED`, `SUBJECT_MISMATCH`. Open **Evidence** on the lookalike: every check passes until the subject binding, where the manifest identity and the credential subject sit side by side.
 3. **Engage** the verified agent — the control is disabled on the others, and the refusal is audited. It pauses for authorization and offers three ways to present: **Send to wallet** (a DIDComm message to the linked Heka Wallet — see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), a QR code with the raw request for a phone with a camera, or **Simulate presentation** without a phone. The task completes with the payment export.
 
+   The panel says what is asked and walks Requested → Wallet fetched → Verified → Status checked → Authorized as the person acts, with the agent's timeout counting down; the completed task shows a presentation card — claims, issuer, holder, status check, and how it was presented (a simulated holder is labelled) — with **Raw VP** for the compact token. The **Tasks** tab lists every engagement and reopens one; a pending task keeps running while you look elsewhere.
+
    > Present promptly. The verification session expires after Credo's default window and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired`. Nothing is corrupted — press **Resend to wallet** or engage again.
 
    Engaging the verified **MCP server** instead takes you to the MCP tools tab: an MCP server is engaged by calling its tools, not by starting a task.
 
-4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. The badge shows the token's remaining lifetime; **Drop token** discards it.
+4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. The same card appears above the bank details; the badge counts the token's lifetime down; **Drop token** discards it.
 5. In the Console, **revoke** the Finance Data Officer credential.
    - Engage the agent again → the presentation still submits, and the sensitive step is then denied.
    - For the MCP path, press **Drop token** first — a token already minted stays valid for its remaining five minutes, which is how OAuth is meant to behave — then the authorization server refuses to mint a new one.

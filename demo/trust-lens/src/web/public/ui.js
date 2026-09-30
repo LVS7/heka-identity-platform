@@ -56,5 +56,15 @@ window.ui = (() => {
     }, 1200)
   }
 
-  return { el, escapeHtml, renderQr, formatWhen, renderWalletChip, copyText }
+  /** Scalar evidence as key/value rows; nested objects (a presentation, say) are rendered by the caller. */
+  function renderEvidence(evidence, omit = []) {
+    if (!evidence || typeof evidence !== 'object') return ''
+    const rows = Object.entries(evidence)
+      .filter(([key, value]) => value !== undefined && typeof value !== 'object' && !omit.includes(key))
+      .map(([key, value]) => `<div><span>${escapeHtml(key)}</span><code>${escapeHtml(String(value))}</code></div>`)
+      .join('')
+    return rows ? `<div class="kv compact">${rows}</div>` : ''
+  }
+
+  return { el, escapeHtml, renderQr, formatWhen, renderWalletChip, copyText, renderEvidence }
 })()

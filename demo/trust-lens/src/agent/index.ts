@@ -34,6 +34,12 @@ import { loadState } from '../seed/state'
 import { OFFICER_CREDENTIAL } from '../shared/demo-config'
 import { identityServiceFromEnv, IdentityServiceClient } from '../shared/identity-service'
 import {
+  authorizedResult,
+  deniedResult,
+  NO_PRESENTATION_IN_TIME,
+  requestedFromDefinition,
+} from '../shared/authorization-result'
+import {
   assertPresentedCredentialValid,
   PresentationRefused,
   PresentedCredential,
@@ -44,6 +50,8 @@ import {
 import {
   IN_TASK_OID4VP_EXTENSION_URI,
   InTaskOpenId4VpAuthorizationRequest,
+  InTaskOpenId4VpAuthorizationResult,
+  InTaskOpenId4VpAuthorizationStatus,
   InTaskOpenId4VpExtension,
   InTaskOpenId4VpMessageMetadata,
 } from './extension'
@@ -80,6 +88,20 @@ const OFFICER_PRESENTATION_DEFINITION = {
       },
     },
   ],
+}
+
+/** The same definition in plain fields, so the client can show what is asked (demo addition). */
+const OFFICER_REQUESTED = requestedFromDefinition(OFFICER_PRESENTATION_DEFINITION)
+
+/** What the agent says as the wallet moves the verifier session along; other states are silent. */
+const SESSION_STATE_TEXT: Record<string, string> = {
+  RequestUriRetrieved: 'The wallet fetched the request.',
+  ResponseVerified: "Presentation verified; checking the credential's status.",
+}
+
+/** The extension's metadata slot: one key, the spec field plus the labelled demo additions. */
+function withExtension(metadata: InTaskOpenId4VpMessageMetadata): Record<string, unknown> {
+  return { [IN_TASK_OID4VP_EXTENSION_URI]: metadata }
 }
 
 function agentCard(): AgentCard {
@@ -122,12 +144,22 @@ function agentCard(): AgentCard {
   }
 }
 
-class AuthorizationDenied extends Error {}
+class AuthorizationDenied extends Error {
+  public constructor(
+    message: string,
+    /** What the client is told (demo addition); absent only when the denial has no session. */
+    public readonly result?: InTaskOpenId4VpAuthorizationResult
+  ) {
+    super(message)
+    this.name = 'AuthorizationDenied'
+  }
+}
 
 class InvoiceAgentExecutor implements AgentExecutor {
   private readonly authorizedContexts = new Set<string>()
   private readonly sessionToContext = new Map<string, string>()
-  private readonly verifiedSessions = new Set<string>()
+  /** Latest Heka state per session this agent opened — what `authorizationStatus` forwards. */
+  private readonly sessionStates = new Map<string, string>()
   private readonly cancelled = new Set<string>()
 
   private verifierDid: string | null = null
@@ -170,8 +202,10 @@ class InvoiceAgentExecutor implements AgentExecutor {
     const session = message.verificationSession
     if (message.type !== 'OpenId4VcVerifier.VerificationSessionStateChanged' || !session?.id) return
 
+    // Heka notifies for every session in the tenant, the AS's included; only ours are tracked.
+    if (!this.sessionToContext.has(session.id)) return
     console.log(`[agent] session ${session.id.slice(0, 8)} -> ${session.state}`)
-    if (session.state === 'ResponseVerified') this.verifiedSessions.add(session.id)
+    if (session.state) this.sessionStates.set(session.id, session.state)
   }
 
   public cancelTask = async (taskId: string): Promise<void> => {
@@ -217,6 +251,9 @@ class InvoiceAgentExecutor implements AgentExecutor {
       eventBus.publish(update)
     }
 
+    // Set only when this task ran the authorization itself; a context authorized earlier has none.
+    let result: InTaskOpenId4VpAuthorizationResult | undefined
+
     try {
       say('working', 'Reconciling supplier invoices for the period…')
 
@@ -225,13 +262,24 @@ class InvoiceAgentExecutor implements AgentExecutor {
         say('working', `Reconciliation complete. ${SENSITIVE_STEP} requires authorization.`)
 
         const { request, sessionId } = await this.requestAuthorization(contextId)
-        say('auth-required', 'Present a Finance Data Officer credential to authorize the payment export.', {
-          metadata: {
-            [IN_TASK_OID4VP_EXTENSION_URI]: { authorizationRequest: request } satisfies InTaskOpenId4VpMessageMetadata,
-          },
+        // The agent's own deadline; the verifier session has a shorter lifetime Heka does not expose.
+        const expiresAt = new Date(Date.now() + AUTHORIZATION_TIMEOUT_MS).toISOString()
+        const statusOf = (state: string): InTaskOpenId4VpAuthorizationStatus => ({
+          sessionId,
+          state,
+          expiresAt,
+          requested: OFFICER_REQUESTED,
         })
 
-        await this.awaitAuthorization(sessionId, contextId)
+        say('auth-required', 'Present a Finance Data Officer credential to authorize the payment export.', {
+          metadata: withExtension({ authorizationRequest: request, authorizationStatus: statusOf('RequestCreated') }),
+        })
+
+        const { presented, status } = await this.awaitAuthorization(sessionId, contextId, expiresAt, (state) => {
+          const text = SESSION_STATE_TEXT[state]
+          if (text) say('working', text, { metadata: withExtension({ authorizationStatus: statusOf(state) }) })
+        })
+        result = authorizedResult(presented, status)
         say('working', 'Authorization accepted. Preparing the payment export…')
       }
 
@@ -241,13 +289,15 @@ class InvoiceAgentExecutor implements AgentExecutor {
       }
 
       const report = await prepareInvoiceReport(collectText(context))
-      say('completed', report)
+      say('completed', report, result ? { metadata: withExtension({ authorizationResult: result }) } : undefined)
     } catch (error) {
       const denied = error instanceof AuthorizationDenied
       console.log(`[agent] task ${taskId.slice(0, 8)} ${denied ? 'denied' : 'failed'}: ${(error as Error).message}`)
+      const message = (error as Error).message
       say(
         'failed',
-        denied ? `Authorization denied: ${(error as Error).message}` : `Agent error: ${(error as Error).message}`
+        denied ? `Authorization denied: ${message}` : `Agent error: ${message}`,
+        denied && error.result ? { metadata: withExtension({ authorizationResult: error.result }) } : undefined
       )
     }
   }
@@ -276,9 +326,11 @@ class InvoiceAgentExecutor implements AgentExecutor {
 
   private async awaitAuthorization(
     sessionId: string,
-    contextId: string
+    contextId: string,
+    expiresAt: string,
+    onState: (state: string) => void
   ): Promise<{ presented: PresentedCredential; status: StatusCheck }> {
-    await this.waitForVerifiedPresentation(sessionId)
+    await this.waitForVerifiedPresentation(sessionId, Date.parse(expiresAt), onState)
 
     // Heka verified the signature and the key binding. Whether this relying party accepts the
     // credential — its issuer, its type, and whether it is still live — is decided here, against
@@ -318,28 +370,41 @@ class InvoiceAgentExecutor implements AgentExecutor {
           console.log(`[agent] status list origin ${origin} is not ${this.identityService.baseOrigin}`)
         }
         console.log(`[agent] presentation refused (${error.reason}): ${error.message}`)
-        throw new AuthorizationDenied(error.message)
+        throw new AuthorizationDenied(error.message, deniedResult(sessionId, error.message, presented, error.reason))
       }
       throw error
     }
   }
 
-  private waitForVerifiedPresentation(sessionId: string): Promise<void> {
-    if (this.verifiedSessions.has(sessionId)) return Promise.resolve()
-
+  /**
+   * Resolve once Heka reports `ResponseVerified`, calling `onState` on every state change on the
+   * way (the wallet fetching the request is the first sign of life the operator can see). The
+   * WebSocket is the fast path; every few seconds Heka is asked directly in case a notification
+   * fell into a reconnect gap.
+   */
+  private waitForVerifiedPresentation(
+    sessionId: string,
+    deadline: number,
+    onState: (state: string) => void
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const started = Date.now()
+      let reported = 'RequestCreated'
       let ticks = 0
       let checking = false
       const poll = setInterval(async () => {
-        if (this.verifiedSessions.has(sessionId)) {
+        const state = this.sessionStates.get(sessionId)
+        if (state && state !== reported) {
+          reported = state
+          onState(state)
+        }
+        if (state === 'ResponseVerified') {
           clearInterval(poll)
           resolve()
           return
         }
-        if (Date.now() - started > AUTHORIZATION_TIMEOUT_MS) {
+        if (Date.now() > deadline) {
           clearInterval(poll)
-          reject(new AuthorizationDenied('no presentation was received in time'))
+          reject(new AuthorizationDenied(NO_PRESENTATION_IN_TIME, deniedResult(sessionId, NO_PRESENTATION_IN_TIME)))
           return
         }
         // Belt and braces: every few seconds, ask Heka in case the notification never came.
@@ -347,9 +412,9 @@ class InvoiceAgentExecutor implements AgentExecutor {
           checking = true
           try {
             const session = await this.identityService.getVerificationSession(sessionId)
-            if (session.state === 'ResponseVerified') this.verifiedSessions.add(sessionId)
+            if (session.state) this.sessionStates.set(sessionId, session.state)
           } catch {
-            // Transient; the next tick tries again and the timeout still bounds the wait.
+            // Transient; the next tick tries again and the deadline still bounds the wait.
           } finally {
             checking = false
           }

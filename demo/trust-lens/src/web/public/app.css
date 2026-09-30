@@ -645,6 +645,187 @@ code {
   gap: 4px;
 }
 
+/* ---------- the presentation in the engagement ---------- */
+
+/* What is asked, before anyone scans: a small titled block inside the amber panel. */
+.asked {
+  margin-top: 12px;
+}
+
+.asked h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+/* The step strip: Requested → Wallet fetched → Verified → Status checked → Authorized. */
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  counter-reset: step;
+}
+
+.steps li {
+  counter-increment: step;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 11px 3px 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.steps li::before {
+  content: counter(step);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+  border: 1px solid var(--line);
+}
+
+.steps li.done {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.steps li.done::before {
+  content: '✓';
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.steps li.current {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.6);
+}
+
+.steps li.bad {
+  color: var(--bad);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.steps li.bad::before {
+  content: '✕';
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+/* The agent's timeout. Red in the last half minute, so a slow tap is visibly about to fail. */
+.countdown {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown:empty {
+  display: none;
+}
+
+.countdown.bad {
+  color: var(--bad);
+}
+
+/* `display: grid` above would beat the hidden attribute; once decided there is nothing to present. */
+.auth-ways[hidden] {
+  display: none;
+}
+
+/* Once decided, the panel is the record, not a prompt: the strip stays, the invitation goes. */
+.auth-panel.settled > .note {
+  display: none;
+}
+
+.auth-panel.settled {
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.05);
+}
+
+.auth-panel.settled h3 {
+  color: var(--ok);
+}
+
+.auth-panel.settled.refused {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.05);
+}
+
+.auth-panel.settled.refused h3 {
+  color: var(--bad);
+}
+
+.card.presentation {
+  margin-top: 16px;
+}
+
+.card.presentation .kv {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.card.presentation.compact {
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+
+.card.presentation.compact h3 {
+  font-size: 14px;
+}
+
+.card.presentation .badge {
+  white-space: normal;
+}
+
+.card.presentation .kv .chip {
+  margin-right: 4px;
+}
+
+.chip.warn {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+.text-ok {
+  color: var(--ok);
+}
+
+.text-bad {
+  color: var(--bad);
+}
+
+/* A failed task is not a green box. */
+.result.bad {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+/* Raw VP: the decoded segments and the compact token in the drawer. */
+.raw-heading {
+  margin: 20px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.raw {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 720px) {

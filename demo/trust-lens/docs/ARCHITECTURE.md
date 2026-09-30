@@ -90,14 +90,22 @@ issuer trust, domain anchoring and digests all hold. Only the subject binding se
 Both paths gate on the **same** Finance Data Officer credential, through different mechanisms.
 
 **A2A** (`src/agent`) — the agent creates a verification session, returns `auth-required` carrying
-the OID4VP request in `message.metadata[<extension URI>]`, and resumes when the session reaches
-`ResponseVerified`.
+the OID4VP request in `message.metadata[<extension URI>]`, forwards each session state as a
+`working` update, and resumes when the session reaches `ResponseVerified` and the status check
+passes. `completed` and `failed` carry what was verified. Only `authorizationRequest` is the
+spec's; `authorizationStatus` and `authorizationResult` are demo additions under the same key
+(`src/agent/extension.ts`), built by `src/shared/authorization-result.ts` and carried in-band
+because the client never reads the verifier's session.
 
 **MCP** (`src/mcp`) — the resource server answers `401` (then `403 insufficient_scope` once a
 token exists but lacks the scope), naming the scope in `WWW-Authenticate`. The client walks
 RFC 9728 → RFC 8414 → authorization with PKCE and an RFC 8707 resource indicator. Where a login
 form would be, the AS runs an OID4VP presentation, then mints a ~5 minute JWT carrying the
-verified role, audience-bound to that MCP server.
+verified role, audience-bound to that MCP server. The AS's poll answers mirror the same demo
+additions (`session` while pending, `presentation` on a grant or a denial). The Trust Lens folds
+both paths into one view (`src/web/presentation.ts`), decides the presentation's source (wallet,
+QR, simulated — the relying party cannot tell), and records the presentation with every
+completion, grant and denial in the audit.
 
 The MCP server and client know nothing about verifiable credentials. That is the point: the
 composition needs no bespoke wire format, so an ordinary MCP client still works.
