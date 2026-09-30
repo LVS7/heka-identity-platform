@@ -74,13 +74,26 @@ separate page for the A2A server serves the following goals:
 ```ts
 // journal.ts — ring buffer, newest first on read
 export type AgentEventType =
-  | 'task.state' | 'auth.requested' | 'session.state' | 'auth.verified' | 'status.checked'
-  | 'auth.authorized' | 'auth.denied' | 'channel.open' | 'channel.closed' | 'llm.fallback'
+  | 'task.state'
+  | 'auth.requested'
+  | 'session.state'
+  | 'auth.verified'
+  | 'status.checked'
+  | 'auth.authorized'
+  | 'auth.denied'
+  | 'channel.open'
+  | 'channel.closed'
+  | 'llm.fallback'
   | 'authorizations.cleared'
 export interface AgentEvent {
-  id: string; at: string; type: AgentEventType
-  taskId?: string; contextId?: string; sessionId?: string
-  text: string; data?: unknown
+  id: string
+  at: string
+  type: AgentEventType
+  taskId?: string
+  contextId?: string
+  sessionId?: string
+  text: string
+  data?: unknown
 }
 export class AgentJournal {
   constructor(capacity = 500)
@@ -90,29 +103,46 @@ export class AgentJournal {
 
 // state.ts — what the page reads
 export interface TaskView {
-  id: string; contextId: string; state: string; startedAt: string; updatedAt: string
+  id: string
+  contextId: string
+  state: string
+  startedAt: string
+  updatedAt: string
   steps: Array<{ at: string; state: string; text?: string }>
-  sessionId?: string; result?: string; error?: string
+  sessionId?: string
+  result?: string
+  error?: string
 }
 export interface AuthorizationRecord {
-  sessionId: string; taskId: string; contextId: string
-  requestedAt: string; sessionState: string; expiresAt: string
+  sessionId: string
+  taskId: string
+  contextId: string
+  requestedAt: string
+  sessionState: string
+  expiresAt: string
   verifiedAt?: string
-  presentation?: Omit<PresentedCredential, 'vpToken'>   // T1 type; the token itself stays with the Trust Lens audit
+  presentation?: Omit<PresentedCredential, 'vpToken'> // T1 type; the token itself stays with the Trust Lens audit
   status?: StatusCheck
-  outcome?: 'authorized' | 'denied'; reason?: string; decidedAt?: string
+  outcome?: 'authorized' | 'denied'
+  reason?: string
+  decidedAt?: string
 }
-export interface ChannelView { state: 'connecting' | 'open' | 'closed'; since: string; reconnects: number; lastError?: string }
+export interface ChannelView {
+  state: 'connecting' | 'open' | 'closed'
+  since: string
+  reconnects: number
+  lastError?: string
+}
 export class AgentState {
   readonly journal: AgentJournal
   readonly tasks: Map<string, TaskView>
   readonly authorizations: Map<string, AuthorizationRecord>
   channel: ChannelView
-  taskStep(taskId, contextId, state, text?): void          // called from say()
+  taskStep(taskId, contextId, state, text?): void // called from say()
   authorizationRequested(record): void
   sessionState(sessionId, state): void
   authorizationDecided(sessionId, outcome, details): void
-  forgetAuthorizations(): number                            // returns how many contexts were cleared
+  forgetAuthorizations(): number // returns how many contexts were cleared
 }
 ```
 
@@ -131,17 +161,17 @@ continued). Keep `contextId` as is.
 
 Mounted **before** `setupRoutes` on the same `express()`:
 
-| Route                                | Returns                                                                                                                          |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                        | `{ ok: true, uptimeSeconds, verifierDid, channel: ChannelView }`                                                                  |
-| `GET /api/state`                     | `{ agent: { name, publicUrl, port, verifierDid, resourceDid, authorizationTimeoutMs, llm: { enabled, model? } }, trust: { trustedIssuer, statusListOrigin }, channel, counts: { tasks, authorized, denied }, startedAt }` |
-| `GET /api/card`                      | `{ live: agentCard(), staticCardUrl: 'https://acme-invoices.example/.well-known/agent-card.json', note }`                        |
-| `GET /api/tasks`                     | `{ tasks: TaskView[] }` newest first                                                                                             |
-| `GET /api/tasks/:id`                 | `TaskView` or 404                                                                                                                |
-| `GET /api/authorizations`            | `{ authorizations: AuthorizationRecord[] }` newest first                                                                         |
-| `GET /api/events?since=&limit=`      | `{ events: AgentEvent[] }`                                                                                                       |
-| `POST /api/authorizations/forget`    | `{ cleared: n }`; records `authorizations.cleared`                                                                               |
-| `GET /` and static                   | `src/agent/public/{index.html, agent.js}`; `/shared` → `src/web/public` (for `app.css`, `ui.js`)                                  |
+| Route                             | Returns                                                                                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                     | `{ ok: true, uptimeSeconds, verifierDid, channel: ChannelView }`                                                                                                                                                          |
+| `GET /api/state`                  | `{ agent: { name, publicUrl, port, verifierDid, resourceDid, authorizationTimeoutMs, llm: { enabled, model? } }, trust: { trustedIssuer, statusListOrigin }, channel, counts: { tasks, authorized, denied }, startedAt }` |
+| `GET /api/card`                   | `{ live: agentCard(), staticCardUrl: 'https://acme-invoices.example/.well-known/agent-card.json', note }`                                                                                                                 |
+| `GET /api/tasks`                  | `{ tasks: TaskView[] }` newest first                                                                                                                                                                                      |
+| `GET /api/tasks/:id`              | `TaskView` or 404                                                                                                                                                                                                         |
+| `GET /api/authorizations`         | `{ authorizations: AuthorizationRecord[] }` newest first                                                                                                                                                                  |
+| `GET /api/events?since=&limit=`   | `{ events: AgentEvent[] }`                                                                                                                                                                                                |
+| `POST /api/authorizations/forget` | `{ cleared: n }`; records `authorizations.cleared`                                                                                                                                                                        |
+| `GET /` and static                | `src/agent/public/{index.html, agent.js}`; `/shared` → `src/web/public` (for `app.css`, `ui.js`)                                                                                                                          |
 
 `resourceDid` is `loadState().dids.acmeAgent`; `trustedIssuer` is `loadState().issuerDid`.
 `POST /` keeps going to the A2A router (static serving only answers `GET`).
@@ -187,7 +217,8 @@ Page (`index.html`, `agent.js`, vanilla, `ui.js` helpers, `app.css`):
       change and LLM fallback appears in `/api/events` with the right ids.
 - [ ] The page shows identity, both cards' relationship, tasks, authorizations with presentation
       details and denials, and events; it polls every 2 s.
-- [ ] Forget authorizations clears `authorizedContexts` and `verifiedSessions` and is journaled.
+- [ ] Forget authorizations clears `authorizedContexts` (and prunes the decided sessions' state)
+      and is journaled.
 - [ ] Global DoD (README); docs and both skills updated.
 
 ## Steps to validate
@@ -230,7 +261,7 @@ Stack per `run-demo` on this branch (it already contains T1–T3).
 
 5. **A denial is recorded** — revoke the officer credential in the console, engage, simulate:
    the authorization card turns red with `the Finance Data Officer credential has been revoked by
-   its issuer`, the task card shows `failed`; `curl -s http://localhost:10003/api/events | jq '.events[0:3]'`
+its issuer`, the task card shows `failed`; `curl -s http://localhost:10003/api/events | jq '.events[0:3]'`
    starts with `auth.denied`. Restore.
 
 6. **Only the agent's sessions** — in the Trust Lens MCP tab, invoke the sensitive tool and
@@ -238,16 +269,24 @@ Stack per `run-demo` on this branch (it already contains T1–T3).
    Events tab gain nothing; the agent log no longer prints that session either.
 
 7. **Forget authorizations** — take `contextId` from step 3's task. Send a second message in
-   that context straight to the agent:
+   that context straight to the agent, non-blocking (a blocking `message/send` waits for a final
+   state, and `auth-required` is deliberately not final — the Trust Lens stream must survive the
+   pause):
 
    ```bash
-   curl -s -X POST http://localhost:10003/ -H "content-type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","messageId":"m-reuse-1","role":"user","contextId":"<contextId>","parts":[{"kind":"text","text":"Reconcile May supplier invoices and prepare the payment export."}]}}}'
+   curl -s -X POST http://localhost:10003/ -H "content-type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"configuration":{"blocking":false},"message":{"kind":"message","messageId":"m-reuse-1","role":"user","contextId":"<contextId>","parts":[{"kind":"text","text":"Reconcile May supplier invoices and prepare the payment export."}]}}}'
    ```
 
-   Expect a task that reaches `completed` with no `auth-required` step (the context is still
+   Take `result.id` and, after a few seconds, `tasks/get`:
+
+   ```bash
+   curl -s -X POST http://localhost:10003/ -H "content-type: application/json" -d '{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"id":"<result.id>"}}' | jq '.result.status.state'
+   ```
+
+   Expect `"completed"` with no `auth-required` step on the Tasks tab (the context is still
    authorized). Press **Forget authorizations** on the page (`cleared: 1` in the response, an
-   `authorizations.cleared` event). Repeat the curl with `messageId` `m-reuse-2`: the returned task
-   is in `auth-required` and a new authorization card appears.
+   `authorizations.cleared` event). Repeat both curls with `messageId` `m-reuse-2`: `tasks/get` says
+   `"auth-required"` and a new authorization card appears.
 
 8. **Channel health** — restart the Identity Service container (restart, never `down`):
 

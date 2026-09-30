@@ -826,6 +826,103 @@ code {
   word-break: break-all;
 }
 
+/* ---------- agent server view ---------- */
+
+.counters {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.counter {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  min-width: 120px;
+}
+
+.counter strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.counter span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Filter chips are buttons that look like chips; the button rule above would give them button padding. */
+.filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.filters .chip {
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+
+.filters .chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* The one action on the page, with its inline confirmation. */
+.forget {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.forget .note {
+  margin: 0;
+}
+
+/* A task's steps and an authorization's strip sit under the card's title row. */
+.card > .timeline,
+.card > .steps,
+.card > .countdown,
+.card > pre.raw {
+  grid-column: 1 / -1;
+}
+
+.card > .timeline {
+  margin-top: 4px;
+  gap: 6px;
+}
+
+.card > .timeline li {
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+
+.card > .steps {
+  margin-top: 4px;
+}
+
+.card > .countdown {
+  margin-top: 0;
+}
+
+.card > pre.raw {
+  margin: 4px 0 0;
+}
+
+.card > .kv.compact {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 720px) {

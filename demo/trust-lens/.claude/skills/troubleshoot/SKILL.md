@@ -71,6 +71,14 @@ changed address — repeat.
 The agent's own timeout (`AGENT_AUTH_TIMEOUT_MS`, default 180s) — distinct from the session
 expiring, same practical cause.
 
+### Did the wallet fetch the request at all?
+
+The agent's server view answers without reading its terminal: `http://localhost:10003/`, Events
+tab — `session RequestUriRetrieved` means the wallet fetched the request, `auth.verified` that
+Heka accepted the presentation, `status.checked` what the agent read from the status list. No
+`session.state` at all means the request never reached a wallet (or the notification channel is
+down: the header badge says `reconnecting…` and `/health` shows `channel.state`).
+
 ### Every entry turns `NO_ATTESTATION` with `no such table: items`
 
 The verifier's Askar store evaporated. `inMemory: true` puts the database _inside the pooled
@@ -182,6 +190,7 @@ that ADR.
 
 1. **Read the logs on both sides of the boundary.** Most failures here are between two
    components, and each side tells half the story: agent + wallet, AS + MCP server, web + agent.
+   The agent's side is also on its page: `http://localhost:10003/` (Events).
 2. **Check whether the state is stale.** `.seed-state.json` outliving Heka's database is the most
    common invisible cause.
 3. **Reproduce without the UI.** `yarn verify:live` exercises DID resolution, SD-JWT verification,

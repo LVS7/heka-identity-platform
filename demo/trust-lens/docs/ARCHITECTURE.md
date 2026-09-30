@@ -48,6 +48,10 @@ attested, separately revocable. That is what makes per-resource granularity demo
           └──────────────────┘
 ```
 
+The agent also serves its own read-only page on the A2A port (`src/agent/server-view.ts`,
+`src/agent/public/`): a journal (`src/agent/journal.ts`) and a state index (`src/agent/state.ts`)
+fed by the executor — the relying party's record, separate from the Trust Lens audit.
+
 `src/core` is deliberately dependency-light: it decides verdicts and knows nothing about Credo,
 Express or Heka. External capabilities (DID resolution, SD-JWT verification, HTTP) are injected,
 which is what makes the whole decision table unit-testable without a network.
@@ -137,7 +141,7 @@ is wrong.
 src/
   core/         verdicts, digests, status lists, audit — no I/O frameworks, fully unit-tested
   web/          Trust Lens: discovery, verification, A2A task tracking, MCP client, static UI (ui.js and app.css are shared with the console)
-  agent/        Acme Invoice Agent (A2A + In-Task Auth)
+  agent/        Acme Invoice Agent (A2A + In-Task Auth); journal.ts, state.ts, server-view.ts and public/ for its server view
   mcp/          MCP resource server and the OAuth 2.1 authorization server
   console/      TrustCo Console
   shared/       Heka client, Credo holder/verifier agents, simulated wallet, demo cast

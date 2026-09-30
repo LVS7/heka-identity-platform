@@ -144,6 +144,7 @@ outbound, so the ports need no `-p`; they just must not collide. The link itself
 curl -s "http://localhost:4000/api/discovery?q=Acme%20invoice"   # 3 results
 curl -s http://localhost:4100/api/credentials                    # 3 credential tiles
 curl -s http://localhost:4000/api/mcp/tools                      # 2 tools
+curl -s http://localhost:10003/health                            # {"ok":true,…,"channel":{"state":"open",…}}
 ```
 
 Then `yarn verify:live` — the fastest real confidence check, exercising did:hedera resolution,

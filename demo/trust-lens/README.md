@@ -286,7 +286,7 @@ yarn sites      # publisher sites, port 443 — needs sudo on Linux/macOS, fine 
 ```
 
 ```bash
-yarn agent      # Acme Invoice Agent, A2A + OID4VP In-Task Auth
+yarn agent      # Acme Invoice Agent, A2A + OID4VP In-Task Auth, server view on the same port
 ```
 
 ```bash
@@ -367,6 +367,7 @@ docker run -d --rm --name trustlens-sites $COMMON \
 docker run -d --rm --name trustlens-agent $COMMON -p 10003:10003 \
   -e ACME_AGENT_PORT=10003 -e ACME_AGENT_PUBLIC_URL=http://trustlens-agent:10003/ \
   node:22-bookworm bash -lc "${BRIDGE}corepack yarn agent"
+# The agent's server view rides on the same port: http://localhost:10003/
 
 docker run -d --rm --name trustlens-as $COMMON -p 4300:4300 \
   -e AS_PORT=4300 -e AS_PUBLIC_URL=http://trustlens-as:4300 \
@@ -415,7 +416,7 @@ docker stop heka-identity-service-heka-identity-service-1 heka-identity-service-
 
 ## Open the demo
 
-Both paths land here. Open **http://localhost:4000** (Trust Lens) and **http://localhost:4100** (TrustCo Console).
+Both paths land here. Open **http://localhost:4000** (Trust Lens), **http://localhost:4100** (TrustCo Console) and **http://localhost:10003** (the agent's server view — read-only, the relying party's own record).
 
 | Service               | Port                      |
 | --------------------- | ------------------------- |
@@ -425,13 +426,15 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens) and **http://l
 | TrustCo Console       | 4100                      |
 | Authorization Server  | 4300                      |
 | MCP server            | 4400                      |
-| Acme Invoice Agent    | 10003                     |
+| Acme Invoice Agent    | 10003 (A2A + server view) |
 
 1. Search **Acme invoice** → three results, all "Not verified", relevance 93 / 93 / 91. An empty list means the publisher sites are unreachable — see A1 on Path A, or check that you have not mixed the two paths.
 2. **Verify all** → `VERIFIED`, `VERIFIED`, `SUBJECT_MISMATCH`. Open **Evidence** on the lookalike: every check passes until the subject binding, where the manifest identity and the credential subject sit side by side.
 3. **Engage** the verified agent — the control is disabled on the others, and the refusal is audited. It pauses for authorization and offers three ways to present: **Send to wallet** (a DIDComm message to the linked Heka Wallet — see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), a QR code with the raw request for a phone with a camera, or **Simulate presentation** without a phone. The task completes with the payment export.
 
    The panel says what is asked and walks Requested → Wallet fetched → Verified → Status checked → Authorized as the person acts, with the agent's timeout counting down; the completed task shows a presentation card — claims, issuer, holder, status check, and how it was presented (a simulated holder is labelled) — with **Raw VP** for the compact token. The **Tasks** tab lists every engagement and reopens one; a pending task keeps running while you look elsewhere.
+
+   The same engagement seen from the other side: **http://localhost:10003** is the agent's server view — its identity (verifier `did:key`, resource `did:hedera`), the live agent card next to the digest-pinned one, every task with its status updates, every authorization with the session's progress, the status check and the decision, and a journal. **Forget authorizations** there clears the agent's memory of authorized contexts, so a reused context asks again — which is how to show a revocation biting a context that was authorized before it.
 
    > Present promptly. The verification session expires after Credo's default window and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired`. Nothing is corrupted — press **Resend to wallet** or engage again.
 
@@ -584,18 +587,18 @@ A completed task proves nothing on its own: the simulated holder produces the sa
 
 ## Components
 
-| Component            | Where                            | Role                                                                                              |
-| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP tools, audit                                |
-| Verification engine  | `src/core`                       | catalog → trustManifest → VC attestation → verdict, plus the audit log                            |
-| Acme Invoice Agent   | `src/agent`                      | A2A agent with OID4VP In-Task Auth                                                                |
-| Acme Invoice Data    | `src/mcp/server.ts`              | MCP server as an OAuth 2.1 resource server                                                        |
-| Authorization Server | `src/mcp/auth-server.ts`         | OAuth 2.1 AS whose interaction step is an OID4VP presentation                                     |
-| TrustCo Console      | `src/console`                    | issuer's credential tiles and revoke switches, the officer offer as a QR, and an activity journal |
-| Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations                           |
-| Seed                 | `src/seed.ts`                    | DIDs, credentials, status list, catalogs                                                          |
-| Simulated holder     | `src/shared/simulated-wallet.ts` | presents the officer credential without a phone                                                   |
-| Wallet link          | `src/shared/wallet-link.ts`      | DIDComm delivery of requests and offers to the operator's Heka Wallet                             |
+| Component            | Where                            | Role                                                                                                  |
+| -------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP tools, audit                                    |
+| Verification engine  | `src/core`                       | catalog → trustManifest → VC attestation → verdict, plus the audit log                                |
+| Acme Invoice Agent   | `src/agent`                      | A2A agent with OID4VP In-Task Auth; its server view (journal, tasks, authorizations) on the same port |
+| Acme Invoice Data    | `src/mcp/server.ts`              | MCP server as an OAuth 2.1 resource server                                                            |
+| Authorization Server | `src/mcp/auth-server.ts`         | OAuth 2.1 AS whose interaction step is an OID4VP presentation                                         |
+| TrustCo Console      | `src/console`                    | issuer's credential tiles and revoke switches, the officer offer as a QR, and an activity journal     |
+| Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations                               |
+| Seed                 | `src/seed.ts`                    | DIDs, credentials, status list, catalogs                                                              |
+| Simulated holder     | `src/shared/simulated-wallet.ts` | presents the officer credential without a phone                                                       |
+| Wallet link          | `src/shared/wallet-link.ts`      | DIDComm delivery of requests and offers to the operator's Heka Wallet                                 |
 
 External: **Heka Identity Service** (issuer / verifier / status lists) and, optionally, **Heka Wallet** on a device.
 

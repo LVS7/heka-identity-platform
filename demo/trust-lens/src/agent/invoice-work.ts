@@ -19,7 +19,9 @@ function deterministicReport(): string {
   const matched = INVOICES.filter((i) => i.status === 'matched')
   const held = INVOICES.filter((i) => i.status !== 'matched')
 
-  const lines = INVOICES.map((i) => `  ${i.invoice.padEnd(14)} ${i.supplier.padEnd(26)} ${i.amount.padStart(13)}  ${i.status}`)
+  const lines = INVOICES.map(
+    (i) => `  ${i.invoice.padEnd(14)} ${i.supplier.padEnd(26)} ${i.amount.padStart(13)}  ${i.status}`
+  )
 
   return [
     'Payment export prepared.',
@@ -31,11 +33,19 @@ function deterministicReport(): string {
   ].join('\n')
 }
 
+export const LLM_MODEL = 'gpt-4o-mini'
+
+/** Whether the agent narrates; the page shows this, and `/api/state` reports it. */
+export function llmEnabled(): boolean {
+  const key = process.env.OPENAI_API_KEY
+  return Boolean(key && !key.startsWith('your_'))
+}
+
 async function llmReport(prompt: string): Promise<string> {
   const { genkit } = await import('genkit')
   const { openAI } = await import('@genkit-ai/compat-oai/openai')
 
-  const ai = genkit({ plugins: [openAI()], model: openAI.model('gpt-4o-mini') })
+  const ai = genkit({ plugins: [openAI()], model: openAI.model(LLM_MODEL) })
 
   const { text } = await ai.generate({
     prompt: [
@@ -52,15 +62,18 @@ async function llmReport(prompt: string): Promise<string> {
   return text?.trim() || deterministicReport()
 }
 
-export async function prepareInvoiceReport(prompt: string): Promise<string> {
-  if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.startsWith('your_')) {
+/** `onFallback` is told why the LLM was not used at run time; a missing key is not a fallback, it is the default. */
+export async function prepareInvoiceReport(prompt: string, onFallback?: (reason: string) => void): Promise<string> {
+  if (!llmEnabled()) {
     return deterministicReport()
   }
 
   try {
     return await llmReport(prompt)
   } catch (error) {
-    console.log(`[agent] LLM unavailable (${(error as Error).message}); using the deterministic report`)
+    const reason = (error as Error).message
+    console.log(`[agent] LLM unavailable (${reason}); using the deterministic report`)
+    onFallback?.(reason)
     return deterministicReport()
   }
 }

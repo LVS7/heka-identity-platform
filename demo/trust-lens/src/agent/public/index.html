@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Invoice Agent — server view</title>
+    <link rel="stylesheet" href="./shared/app.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <h1>Acme Invoice Agent <span class="role-chip">Server</span></h1>
+        <p class="subtitle">The agent's own view: what it was asked, what it verified, what it refused</p>
+      </div>
+      <div class="channel">
+        <span class="badge" id="channel-chip">Heka notifications: connecting…</span>
+      </div>
+      <nav>
+        <button class="tab active" data-view="overview">Overview</button>
+        <button class="tab" data-view="tasks">Tasks</button>
+        <button class="tab" data-view="authorizations">Authorizations</button>
+        <button class="tab" data-view="events">Events</button>
+      </nav>
+    </header>
+
+    <main>
+      <p class="failure" id="load-error" hidden></p>
+
+      <section id="overview" class="view active">
+        <h2>Overview</h2>
+        <p class="note">
+          What this process recorded about itself — read-only, except <strong>Forget authorizations</strong> on the
+          Authorizations tab. The holder's and the client's actions live in the Trust Lens; its audit is separate from
+          this journal.
+        </p>
+        <div class="counters" id="counters"></div>
+
+        <div class="panel">
+          <h3>Identity</h3>
+          <div class="kv" id="identity-kv"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Trust</h3>
+          <div class="kv" id="trust-kv"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Agent card</h3>
+          <p class="note" id="card-note"></p>
+          <pre class="raw" id="card-json"></pre>
+        </div>
+      </section>
+
+      <section id="tasks" class="view">
+        <h2>Tasks</h2>
+        <p class="note">Every task this agent ran, newest first, with each status update it published.</p>
+        <div id="task-list" class="cards"></div>
+      </section>
+
+      <section id="authorizations" class="view">
+        <h2>Authorizations</h2>
+        <p class="note">
+          One record per verifier session this agent opened. The AS's sessions on the shared Heka tenant are not here:
+          the agent drops every notification for a session it did not create.
+        </p>
+        <div class="forget">
+          <button class="danger" id="forget">Forget authorizations</button>
+          <span id="forget-confirm" hidden>
+            <span class="note" id="forget-question"></span>
+            <button class="danger" id="forget-yes">Yes, forget</button>
+            <button id="forget-no">Keep</button>
+          </span>
+          <span class="note" id="forget-note"></span>
+        </div>
+        <div id="authorization-list" class="cards"></div>
+      </section>
+
+      <section id="events" class="view">
+        <h2>Events</h2>
+        <p class="note">The journal, newest first. Filter by type; the list grows as the agent works.</p>
+        <div class="filters" id="event-filters"></div>
+        <ol id="event-list" class="timeline"></ol>
+      </section>
+    </main>
+
+    <script src="./shared/ui.js"></script>
+    <script src="./agent.js"></script>
+  </body>
+</html>

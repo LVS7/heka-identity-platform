@@ -9,7 +9,7 @@ during development — none of it is speculative.
 | --------------------- | ------------------------- | ----------------------- |
 | Heka Identity Service | 3000 (API), 3003 (OID4VC) | everything              |
 | Publisher sites       | 443                       | discovery, verification |
-| Acme Invoice Agent    | 10003                     | A2A path                |
+| Acme Invoice Agent    | 10003 (A2A + server view) | A2A path                |
 | Authorization Server  | 4300                      | MCP path                |
 | MCP server            | 4400                      | MCP path                |
 | Trust Lens            | 4000 (+4010 DIDComm)      | the UI                  |
