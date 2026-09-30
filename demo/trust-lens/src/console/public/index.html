@@ -5,64 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TrustCo Console</title>
     <link rel="stylesheet" href="./shared/app.css" />
-    <style>
-      .issuer {
-        margin-top: 18px;
-        display: grid;
-        gap: 6px;
-        font-size: 12.5px;
-      }
-      .issuer div {
-        display: grid;
-        grid-template-columns: 120px 1fr;
-        gap: 12px;
-      }
-      .issuer span:first-child {
-        color: var(--muted);
-      }
-      .tile {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        padding: 16px 18px;
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 10px 18px;
-        align-items: center;
-      }
-      .tile.revoked {
-        border-color: rgba(248, 113, 113, 0.45);
-      }
-      .tile h3 {
-        margin: 0 0 3px;
-        font-size: 15px;
-      }
-      .effect {
-        grid-column: 1 / -1;
-        color: var(--muted);
-        font-size: 12.5px;
-        margin: 0;
-      }
-      .tile .actions {
-        justify-content: flex-end;
-      }
-      .offer-note {
-        grid-column: 1 / -1;
-        font-size: 13px;
-      }
-      .offer-note .ok {
-        color: var(--ok);
-      }
-      .offer-note .bad {
-        color: var(--bad);
-      }
-    </style>
   </head>
   <body>
     <header>
       <div class="brand">
-        <h1>TrustCo Console</h1>
-        <p class="subtitle">Certification body — credential lifecycle</p>
+        <h1>TrustCo Console <span class="role-chip">Issuer</span></h1>
+        <p class="subtitle">Certification body · issues Resource Passports and the officer role credential</p>
       </div>
       <div class="wallet" id="wallet">
         <span class="badge" id="wallet-chip">wallet: not linked</span>
@@ -73,26 +21,44 @@
           aria-label="Wallet public DID"
         />
         <button id="wallet-link">Link wallet</button>
+        <button id="wallet-unlink" hidden>Unlink</button>
         <span class="error" id="wallet-error"></span>
       </div>
+      <nav>
+        <button class="tab active" data-view="credentials">Credentials</button>
+        <button class="tab" data-view="activity">Activity</button>
+      </nav>
     </header>
 
     <main>
-      <p class="note">
-        Revoking here updates the published status list. Any relying party reading it — including the Trust Lens and the
-        agent — sees the change on its next check. Nothing is republished, and the registry is not involved.
-      </p>
-      <p class="note">
-        <strong>Send offer to wallet</strong> issues the operator’s Finance Data Officer credential: a fresh OID4VCI
-        offer, delivered to the linked Heka Wallet over DIDComm. The wallet is linked by its Public DID, here or in the
-        Trust Lens — the link is shared.
-      </p>
+      <section id="credentials" class="view active">
+        <h2>Credentials</h2>
+        <p class="note">
+          Revoking here updates the published status list; every relying party — the Trust Lens, the agent, the
+          authorization server — reads it on its next check. Nothing is republished and the registry is not involved.
+          <strong>Send offer to wallet</strong> issues the operator’s Finance Data Officer credential over DIDComm;
+          without a linked wallet the offer is shown as a QR instead.
+        </p>
+        <p class="failure" id="load-error" hidden></p>
 
-      <div id="tiles" class="cards"></div>
+        <div id="tiles" class="cards"></div>
+        <p class="note" id="updated"></p>
 
-      <div class="issuer" id="issuer"></div>
+        <div class="panel" id="issuer">
+          <h3>Issuer</h3>
+          <div class="kv" id="issuer-kv"></div>
+        </div>
+      </section>
+
+      <section id="activity" class="view">
+        <h2>Activity</h2>
+        <p class="note">What this issuer did, newest first: revocations, restores and credential offers.</p>
+        <ol id="activity-list" class="timeline"></ol>
+      </section>
     </main>
 
+    <script src="./shared/vendor/qrcode-generator.js"></script>
+    <script src="./shared/ui.js"></script>
     <script src="./console.js"></script>
   </body>
 </html>

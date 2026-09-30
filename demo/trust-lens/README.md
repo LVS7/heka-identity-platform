@@ -549,7 +549,7 @@ In the **TrustCo Console** (`http://localhost:4100`), press **Send offer to wall
 
 The Credentials tab should now list one `urn:heka:role-credential:v1`.
 
-**An offer is single-use.** Each press of the button mints a new one, so pressing it again after a wallet reset is the whole recovery. The offer URI is also shown under the tile for a phone that would rather scan it.
+**An offer is single-use.** Each press of the button mints a new one, so pressing it again after a wallet reset is the whole recovery. The offer is also shown under the tile as a QR and a URI for a phone that would rather scan it; without a linked wallet the button reads **Mint offer (QR)** and does just that.
 
 Two different failures show on the same "Unable to fetch credential offer" screen, and they need opposite fixes:
 
@@ -576,18 +576,18 @@ A completed task proves nothing on its own: the simulated holder produces the sa
 
 ## Components
 
-| Component            | Where                            | Role                                                                    |
-| -------------------- | -------------------------------- | ----------------------------------------------------------------------- |
-| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP tools, audit      |
-| Verification engine  | `src/core`                       | catalog → trustManifest → VC attestation → verdict, plus the audit log  |
-| Acme Invoice Agent   | `src/agent`                      | A2A agent with OID4VP In-Task Auth                                      |
-| Acme Invoice Data    | `src/mcp/server.ts`              | MCP server as an OAuth 2.1 resource server                              |
-| Authorization Server | `src/mcp/auth-server.ts`         | OAuth 2.1 AS whose interaction step is an OID4VP presentation           |
-| TrustCo Console      | `src/console`                    | issuer's credential tiles and revoke switches                           |
-| Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations |
-| Seed                 | `src/seed.ts`                    | DIDs, credentials, status list, catalogs                                |
-| Simulated holder     | `src/shared/simulated-wallet.ts` | presents the officer credential without a phone                         |
-| Wallet link          | `src/shared/wallet-link.ts`      | DIDComm delivery of requests and offers to the operator's Heka Wallet   |
+| Component            | Where                            | Role                                                                                              |
+| -------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP tools, audit                                |
+| Verification engine  | `src/core`                       | catalog → trustManifest → VC attestation → verdict, plus the audit log                            |
+| Acme Invoice Agent   | `src/agent`                      | A2A agent with OID4VP In-Task Auth                                                                |
+| Acme Invoice Data    | `src/mcp/server.ts`              | MCP server as an OAuth 2.1 resource server                                                        |
+| Authorization Server | `src/mcp/auth-server.ts`         | OAuth 2.1 AS whose interaction step is an OID4VP presentation                                     |
+| TrustCo Console      | `src/console`                    | issuer's credential tiles and revoke switches, the officer offer as a QR, and an activity journal |
+| Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations                           |
+| Seed                 | `src/seed.ts`                    | DIDs, credentials, status list, catalogs                                                          |
+| Simulated holder     | `src/shared/simulated-wallet.ts` | presents the officer credential without a phone                                                   |
+| Wallet link          | `src/shared/wallet-link.ts`      | DIDComm delivery of requests and offers to the operator's Heka Wallet                             |
 
 External: **Heka Identity Service** (issuer / verifier / status lists) and, optionally, **Heka Wallet** on a device.
 

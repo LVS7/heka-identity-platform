@@ -167,10 +167,17 @@ export class WalletLink {
   /**
    * Another process (the console, or the web) may have written the file since we last looked.
    * The file is authoritative; the env value only ever seeds an absent file.
+   * A link that came from the file goes when the file goes: the other process unlinked, and
+   * delivering to that wallet anyway would ignore the operator's decision.
    */
   private refresh(): void {
     const persisted = this.readFile()
-    if (persisted && persisted.holderDid !== this.current?.holderDid) {
+    if (!persisted && this.source === 'file') {
+      this.current = undefined
+      this.source = undefined
+      this.connectionId = undefined
+      this.connectedTo = undefined
+    } else if (persisted && persisted.holderDid !== this.current?.holderDid) {
       this.current = persisted
       this.source = 'file'
     } else if (persisted && this.source === 'env') {

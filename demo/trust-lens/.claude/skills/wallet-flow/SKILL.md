@@ -96,7 +96,8 @@ DID.
 Console → Finance Data Officer tile → **Send offer to wallet** (or
 `curl -s -X POST http://localhost:4100/api/credentials/officer/offer`). The wallet, in the
 foreground, shows a Credential Offer screen — **the person taps Accept** (scroll down; it sits
-below Decline).
+below Decline). Without a linked wallet the same button reads **Mint offer (QR)** and the
+console shows the offer as a QR for a phone with a camera.
 
 Every press mints a fresh single-use offer, so after `yarn seed --reset` or a wallet reset, just
 press again.

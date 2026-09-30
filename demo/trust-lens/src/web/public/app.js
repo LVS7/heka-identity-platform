@@ -2,12 +2,7 @@
 
 const state = { results: [], verdicts: new Map(), wallet: { linked: false } }
 
-const el = (id) => document.getElementById(id)
-const escapeHtml = (value) =>
-  String(value ?? '').replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
-  )
+const { el, escapeHtml } = ui
 
 const VERDICT_CLASS = { VERIFIED: 'ok' }
 const badgeClass = (verdict) => VERDICT_CLASS[verdict] ?? (verdict ? 'bad' : '')
@@ -22,14 +17,10 @@ async function loadWallet() {
 }
 
 function renderWallet() {
-  const { linked, holderDid, source } = state.wallet
-  const chip = el('wallet-chip')
-  chip.className = `badge ${linked ? 'ok' : ''}`
-  chip.textContent = linked ? `wallet: linked · ${holderDid.slice(0, 22)}…` : 'wallet: not linked'
-  chip.title = linked ? `${holderDid}${source === 'env' ? ' (from HOLDER_PUBLIC_DID)' : ''}` : ''
-  el('wallet-did').hidden = linked
-  el('wallet-link').hidden = linked
-  el('wallet-unlink').hidden = !linked
+  ui.renderWalletChip(
+    { chipId: 'wallet-chip', inputId: 'wallet-did', linkId: 'wallet-link', unlinkId: 'wallet-unlink' },
+    state.wallet
+  )
   // The send buttons depend on the link; re-render whichever panel is open.
   renderSendButton('task')
   renderSendButton('mcp')
@@ -225,13 +216,6 @@ const auth = {
   mcp: { request: null, delivery: null },
 }
 
-function renderQr(target, text) {
-  const qr = qrcode(0, 'M')
-  qr.addData(text)
-  qr.make()
-  target.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true })
-}
-
 function renderSendButton(panel) {
   const button = el(`${panel}-send`)
   if (!button) return
@@ -252,7 +236,7 @@ function renderDelivery(panel) {
       : 'No wallet linked — paste its Public DID in the header, or use the other ways below.'
     return
   }
-  const at = new Date(delivery.at).toLocaleTimeString()
+  const at = ui.formatWhen(delivery.at)
   target.className = `delivery ${delivery.state}`
   target.textContent =
     delivery.state === 'sent'
@@ -266,7 +250,7 @@ function showAuthPanel(panel, request, delivery) {
   auth[panel].delivery = delivery ?? (changed ? null : auth[panel].delivery)
 
   if (changed) {
-    renderQr(el(`${panel}-qr`), request)
+    ui.renderQr(el(`${panel}-qr`), request)
     el(`${panel}-uri`).textContent = request
     el(`${panel}-simulate-note`).textContent = ''
   }
@@ -296,15 +280,6 @@ async function sendToWallet(panel) {
   }
 }
 
-async function copyUri(sourceId) {
-  const text = el(sourceId).textContent
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    // Clipboard access can be refused on http origins; the text is selectable either way.
-  }
-}
-
 // ---------- agent task ----------
 
 let taskPoll = null
@@ -325,7 +300,7 @@ async function engage(identifier) {
     return
   }
 
-  const verifiedAt = new Date(data.verifiedAt).toLocaleTimeString()
+  const verifiedAt = ui.formatWhen(data.verifiedAt)
 
   // An MCP server is not engaged with a task: its tools are on the MCP tab. Going there is the
   // engagement, and the fresh verdict travels along so the tab can say what was verified.
@@ -598,7 +573,7 @@ document.addEventListener('click', (event) => {
   if (send && !send.disabled) sendToWallet(send.dataset.send)
 
   const copy = event.target.closest('[data-copy]')
-  if (copy) copyUri(copy.dataset.copy)
+  if (copy) ui.copyText(el(copy.dataset.copy).textContent, copy)
 })
 
 el('task-simulate').addEventListener('click', simulatePresentation)

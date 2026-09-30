@@ -74,12 +74,12 @@ pages are static and dependency-free):
 
 ```js
 window.ui = {
-  el,               // (id) => element
-  escapeHtml,       // (value) => string
-  renderQr,         // (target, text) — qrcode-generator, SVG, exactly app.js:228-233 today
-  formatWhen,       // (iso) => 'hh:mm:ss' local time
+  el, // (id) => element
+  escapeHtml, // (value) => string
+  renderQr, // (target, text) — qrcode-generator, SVG, exactly app.js:228-233 today
+  formatWhen, // (iso) => 'hh:mm:ss' local time
   renderWalletChip, // ({ chipId, inputId, linkId, unlinkId, errorId }, wallet) — the app.js:24-36 logic
-  copyText,         // (text, button) — the app.js copyUri feedback ('Copied')
+  copyText, // (text, button) — the app.js copyUri feedback ('Copied')
 }
 ```
 
@@ -93,8 +93,9 @@ drop their local copies. The Trust Lens must look and behave exactly as before a
 - `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }` on buttons, tabs, inputs.
 - `button.danger` — a `--bad` outline variant mirroring `.auth-primary` (`app.css:497`); hover
   fills with `rgba(248,113,113,.08)`.
-- `.panel` — a titled container: `background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 16px 18px`, with `.panel h3` at 14 px, muted, uppercase.
+- `.panel` — a titled container (`background: var(--panel)`, `border: 1px solid var(--line)`,
+  `border-radius: var(--radius)`, `padding: 16px 18px`), with `.panel h3` at 12 px, muted,
+  uppercase.
 - `.role-chip` — the Issuer marker next to `h1`: `.chip` sized to the heading, `--accent` border.
 - `main { margin: 0 auto }` (keeps `max-width: 1080px`).
 - `@media (max-width: 720px)`: `header` stacks (`flex-direction: column; align-items: stretch`),
@@ -153,14 +154,16 @@ drop their local copies. The Trust Lens must look and behave exactly as before a
       returns nothing; both files use `ui.*`.
 - [ ] The console header has the `Issuer` chip and the Link / Unlink / Linking… states; the wallet
       chip updates within 5 s after linking or unlinking from the Trust Lens.
-- [ ] Tiles use `.card`; Revoke is visibly a danger action; Send offer is disabled without a wallet.
+- [ ] Tiles use `.card`; Revoke is visibly a danger action. Without a wallet the button reads
+      `Mint offer (QR)` and a note explains; with one it reads `Send offer to wallet`.
 - [ ] The offer result shows a scannable QR, a working Copy button and the delivery line.
 - [ ] No `alert()` in `console.js`; network and revoke failures are shown inline.
 - [ ] `app.css` has `h2`, `:focus-visible`, `.danger`, `.panel`, `.role-chip`, the 720 px
       breakpoint, centred `main`, and no `.auth-row` / `#auth-qr`.
 - [ ] The Activity tab lists revocations and offers (phase 5; T1-C3 is already in this branch).
-- [ ] Trust Lens: no visual regression beyond the intended shared fixes (heading size, centring,
-      focus ring); all its flows still work (Discovery → Verify → Engage → panel; MCP tab; Audit).
+- [ ] Trust Lens: no visual regression beyond the intended shared fixes (heading size and margins,
+      centred content, focus rings, the Copy button's Copied flip, and the ≤720 px layout); all its
+      flows still work (Discovery → Verify → Engage → panel; MCP tab; Audit).
 - [ ] Global DoD (README).
 
 ## Steps to validate
@@ -180,7 +183,9 @@ drop their local copies. The Trust Lens must look and behave exactly as before a
 
 2. **Header parity** — on `:4100` the title reads _TrustCo Console_ with an `Issuer` chip; paste a
    wallet DID → the button shows `Linking…`, then the chip turns green; open `:4000` → the chip is
-   green there too; press **Unlink** on `:4100` → within 5 s `:4000` shows _not linked_.
+   green there too; press **Unlink** on `:4100` → reload `:4000` — it
+   shows _not linked_ (the Trust Lens reads the link once per page load; its server notices the
+   removed file on the next request).
 
    ```bash
    curl -s -X DELETE http://localhost:4100/api/wallet/link
@@ -190,7 +195,8 @@ drop their local copies. The Trust Lens must look and behave exactly as before a
 
 3. **Tiles** — three `.card` articles; chips `status index 3` and `role credential` on the
    officer tile, `resource passport` on the other two; Revoke is red-outlined, Restore plain. With
-   no wallet linked, _Send offer to wallet_ is disabled and the note explains why.
+   no wallet linked the officer button reads _Mint offer (QR)_ and a note explains; with one
+   linked it reads _Send offer to wallet_.
 
 4. **Offer result** — link the wallet, press _Send offer to wallet_: a panel with the delivery
    line `Offer delivered …`, a QR, the URI and a **Copy** button that flips to _Copied_. With the
@@ -219,8 +225,8 @@ drop their local copies. The Trust Lens must look and behave exactly as before a
    `issuance` entry appears.
 
 8. **Trust Lens unchanged** — run `demo-walkthrough` steps 1–5 in the UI; screenshots of
-   Discovery and the MCP tab before and after the branch differ only in the `h2` size, centred
-   content and focus rings.
+   Discovery and the MCP tab before and after the branch differ only in the `h2` size and margins,
+   centred content, focus rings, the Copy button's _Copied_ flip and the layout below 720 px.
 
 ## Docs to update
 

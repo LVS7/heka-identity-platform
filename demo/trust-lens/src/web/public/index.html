@@ -69,7 +69,7 @@
             </div>
             <div class="auth-way">
               <h4>Or scan with Heka Wallet</h4>
-              <div class="qr" id="task-qr" aria-label="OID4VP request QR code"></div>
+              <div class="qr" id="task-qr" role="img" aria-label="OID4VP request QR code"></div>
               <div class="uri"><code id="task-uri"></code><button data-copy="task-uri">Copy</button></div>
             </div>
             <div class="auth-way auth-secondary">
@@ -109,7 +109,7 @@
             </div>
             <div class="auth-way">
               <h4>Or scan with Heka Wallet</h4>
-              <div class="qr" id="mcp-qr" aria-label="OID4VP request QR code"></div>
+              <div class="qr" id="mcp-qr" role="img" aria-label="OID4VP request QR code"></div>
               <div class="uri"><code id="mcp-uri"></code><button data-copy="mcp-uri">Copy</button></div>
             </div>
             <div class="auth-way auth-secondary">
@@ -140,6 +140,7 @@
     </aside>
 
     <script src="./vendor/qrcode-generator.js"></script>
+    <script src="./ui.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

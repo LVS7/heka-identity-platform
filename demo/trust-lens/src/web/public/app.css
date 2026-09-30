@@ -52,6 +52,33 @@ h1 {
   font-size: 13px;
 }
 
+/* View headings sit under the 21px h1; without a rule they fell back to the browser's 1.5em. */
+h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+/* Keyboard users need to see where they are; nothing in the palette changes. */
+button:focus-visible,
+input:focus-visible,
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The console marks itself as the issuer with a chip, not with a different palette. */
+.role-chip {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
 nav {
   display: flex;
   gap: 6px;
@@ -76,6 +103,7 @@ nav {
 main {
   padding: 24px 28px 60px;
   max-width: 1080px;
+  margin: 0 auto;
 }
 
 .view {
@@ -125,6 +153,17 @@ button:disabled {
 #verify-all {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Destructive actions look different from the rest; the revoke switch is the one the audience watches. */
+button.danger {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: var(--bad);
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--bad);
+  background: rgba(248, 113, 113, 0.08);
 }
 
 .note {
@@ -242,6 +281,28 @@ button:disabled {
 .refusal {
   color: var(--bad);
   font-size: 12px;
+}
+
+/* A titled container for a block of related facts (the issuer's details, an offer). */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-top: 20px;
+}
+
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.panel .kv {
+  margin-top: 0;
 }
 
 /* Dismissible backdrop: the drawer overlays the header, so it must be easy to get out of. */
@@ -363,21 +424,6 @@ code {
   color: var(--warn);
 }
 
-.auth-row {
-  display: flex;
-  gap: 22px;
-  align-items: center;
-  margin-top: 14px;
-  flex-wrap: wrap;
-}
-
-#auth-qr {
-  width: 180px;
-  height: 180px;
-  border-radius: 8px;
-  background: #fff;
-}
-
 .result {
   margin-top: 20px;
   padding: 16px 18px;
@@ -481,16 +527,16 @@ code {
   margin: 4px 0 0;
 }
 
-.auth-way .delivery {
+.delivery {
   margin-top: 8px;
   font-size: 12.5px;
 }
 
-.auth-way .delivery.sent {
+.delivery.sent {
   color: var(--ok);
 }
 
-.auth-way .delivery.failed {
+.delivery.failed {
   color: var(--bad);
 }
 
@@ -553,4 +599,81 @@ code {
   font-size: 12px;
   margin-left: 8px;
   vertical-align: middle;
+}
+
+/* ---------- console: the offer panel and compact evidence ---------- */
+
+.panel.offer {
+  margin-top: 8px;
+}
+
+/*
+ * A neutral delivery line is secondary text inside the offer panel. Scoped here so the Trust Lens
+ * hint keeps its own colour, and :not() so this does not outrank the sent/failed colours.
+ */
+.panel.offer .delivery:not(.sent):not(.failed) {
+  color: var(--muted);
+}
+
+/* Anything below a card's title row spans the whole card; an empty error line or offer slot takes no space. */
+.card > .note,
+.card > .refusal,
+.card > .offer-slot {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.card > .refusal:empty,
+.card > .offer-slot:empty {
+  display: none;
+}
+
+.offer-body {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+
+.offer-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.kv.compact {
+  margin-top: 8px;
+  gap: 4px;
+}
+
+/* ---------- small screens ---------- */
+
+@media (max-width: 720px) {
+  header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+
+  .auth-ways,
+  .card {
+    grid-template-columns: 1fr;
+  }
+
+  .right {
+    align-items: flex-start;
+  }
+
+  .kv div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .wallet input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .offer-body {
+    flex-direction: column;
+  }
 }

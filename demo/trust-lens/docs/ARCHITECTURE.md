@@ -128,7 +128,7 @@ is wrong.
 ```
 src/
   core/         verdicts, digests, status lists, audit — no I/O frameworks, fully unit-tested
-  web/          Trust Lens: discovery, verification, A2A task tracking, MCP client, static UI
+  web/          Trust Lens: discovery, verification, A2A task tracking, MCP client, static UI (ui.js and app.css are shared with the console)
   agent/        Acme Invoice Agent (A2A + In-Task Auth)
   mcp/          MCP resource server and the OAuth 2.1 authorization server
   console/      TrustCo Console

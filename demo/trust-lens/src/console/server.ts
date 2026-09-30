@@ -128,6 +128,11 @@ function main() {
     }
   })
 
+  app.delete('/api/wallet/link', async (_req, res) => {
+    await walletLink.unlink()
+    res.json(walletLink.status)
+  })
+
   /**
    * Issue the officer credential to the operator's wallet: mint a fresh offer (pre-authorized
    * codes are single-use) and push it over DIDComm. The offer is returned too, for a phone with a
@@ -154,7 +159,14 @@ function main() {
         })
         res.json({ offer, delivered: true })
       } catch (error) {
-        res.status(502).json({ offer, delivered: false, error: (error as Error).message })
+        const message = (error as Error).message
+        // The offer exists either way; the journal should say it was minted and why it did not arrive.
+        audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', {
+          delivered: false,
+          via: 'DIDComm basic message',
+          error: message,
+        })
+        res.status(502).json({ offer, delivered: false, error: message })
       }
     } catch (error) {
       res.status(502).json({ error: (error as Error).message })
