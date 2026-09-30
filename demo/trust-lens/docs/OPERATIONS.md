@@ -62,6 +62,18 @@ socat TCP-LISTEN:3003,fork,reuseaddr,bind=127.0.0.1 TCP:host.docker.internal:300
 Any container that claims or presents a credential needs this — the seed, the agent, the AS, and
 the Trust Lens (for its simulated holder).
 
+## The chat and the LLM
+
+The chat in the Trust Lens MCP tab needs `OPENAI_API_KEY` (`OPENAI_MODEL`, default `gpt-4o-mini`;
+`OPENAI_BASE_URL` for a compatible endpoint). Without a key `GET /api/chat` answers
+`available: false` with the reason and the direct calls keep working. The model is brought up at
+`yarn web` start; a failure to start is reported the same way. On Path B the web container needs
+egress to the LLM endpoint.
+
+The MCP card's `transport.url` is written at seed time from `MCP_PUBLIC_URL` (default
+`http://localhost:4400`) plus `/mcp`; the Trust Lens connects to what the verified card says, so a
+change of MCP address means `yarn seed` again.
+
 ## Known failure modes
 
 ### `session expired` when presenting

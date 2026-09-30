@@ -43,6 +43,8 @@ dotenv.config()
 
 const STATIC_ROOT = resolve(process.cwd(), 'static')
 const AGENT_URL = process.env.ACME_AGENT_URL ?? `http://localhost:${process.env.ACME_AGENT_PORT ?? 10003}/`
+/** Where the MCP card says the server is. Under Docker the seed runs with MCP_PUBLIC_URL=http://trustlens-mcp:4400. */
+const MCP_URL = process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.MCP_PORT ?? 4400}`
 
 const STATUS_INDEXES = { acmeAgent: 0, acmeMcp: 1, pro: 2, officer: 3 } as const
 
@@ -156,7 +158,7 @@ async function seed() {
   console.log('\n== resource cards ==')
   const cardDigests = new Map<string, string>()
   for (const resource of DEMO_RESOURCES) {
-    const card = `${JSON.stringify(buildCard(resource, AGENT_URL), null, 2)}\n`
+    const card = `${JSON.stringify(buildCard(resource, AGENT_URL, MCP_URL), null, 2)}\n`
     writeStatic(resource.site, `.well-known/${resource.cardFile}`, card)
     cardDigests.set(resource.key, sha256Digest(card))
     console.log(`  ${resource.site}/${resource.cardFile} (${cardDigests.get(resource.key)})`)

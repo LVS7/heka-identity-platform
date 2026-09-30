@@ -115,6 +115,12 @@ export interface VerificationResult {
   verdict: Verdict
   evidence: VerificationEvidence
   verifiedAt: string
+  /**
+   * The resource card the digest check accepted, parsed — only with VERIFIED. What a client
+   * connects to comes from here: the bytes that were verified, not a second fetch and never the
+   * registry.
+   */
+  card?: unknown
 }
 
 // ---------- Audit ----------

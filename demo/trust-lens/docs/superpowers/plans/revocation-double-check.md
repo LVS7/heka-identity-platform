@@ -1789,7 +1789,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 Structure and content (copy the findings table from `docs/tasks/01-revocation-double-check.md` § Findings verbatim, adding a `Status` column with exactly these values):
 
 ```markdown
-# Revocation audit (2026-09-25)
+# Revocation audit
 
 How revocation works in this demo, what the audit found, and what was done about it.
 

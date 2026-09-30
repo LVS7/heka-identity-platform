@@ -49,7 +49,11 @@ const entry = (overrides: Partial<AiCatalogEntry> = {}): AiCatalogEntry => ({
     identity: ACME_AGENT_DID,
     identityType: 'did',
     attestations: [
-      { type: 'application/vc+sd-jwt', uri: `https://${ACME_DOMAIN}/.well-known/attestations/p.sd-jwt`, digest: sha256Digest(ATTESTATION) },
+      {
+        type: 'application/vc+sd-jwt',
+        uri: `https://${ACME_DOMAIN}/.well-known/attestations/p.sd-jwt`,
+        digest: sha256Digest(ATTESTATION),
+      },
     ],
   },
   ...overrides,
@@ -92,6 +96,14 @@ describe('urnPublisherFqdn', () => {
 })
 
 describe('verifyEntry', () => {
+  it('hands the digest-checked card over with a VERIFIED verdict, and nothing else', async () => {
+    const verified = await verifyEntry(entry(), acme, options())
+    expect(verified.card).toEqual({ name: 'Acme Invoice Agent' })
+
+    const swapped = await verifyEntry(entry(), acme, options({ fetchFn: fetchStub({ card: '{"name":"Swapped"}' }) }))
+    expect(swapped.card).toBeUndefined()
+  })
+
   it('returns VERIFIED when every binding holds', async () => {
     const result = await verifyEntry(entry(), acme, options())
 
@@ -119,7 +131,11 @@ describe('verifyEntry', () => {
         identity: PRO_AGENT_DID,
         identityType: 'did',
         attestations: [
-          { type: 'application/vc+sd-jwt', uri: `https://${PRO_DOMAIN}/.well-known/attestations/p.sd-jwt`, digest: sha256Digest(ATTESTATION) },
+          {
+            type: 'application/vc+sd-jwt',
+            uri: `https://${PRO_DOMAIN}/.well-known/attestations/p.sd-jwt`,
+            digest: sha256Digest(ATTESTATION),
+          },
         ],
       },
     })
@@ -159,7 +175,9 @@ describe('verifyEntry', () => {
         verifySdJwt: async () => ({
           valid: true,
           issuer: TRUSTCO,
-          payload: passportClaims({ operator: { legal_name: 'Acme Corp GmbH', domain: 'somewhere-else.example' } }) as never,
+          payload: passportClaims({
+            operator: { legal_name: 'Acme Corp GmbH', domain: 'somewhere-else.example' },
+          }) as never,
         }),
       })
     )

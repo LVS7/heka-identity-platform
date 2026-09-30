@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Trust Lens</title>
-    <link rel="stylesheet" href="./app.css" />
+    <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
     <header>
@@ -25,15 +25,15 @@
         <span class="error" id="wallet-error"></span>
       </div>
       <nav>
-        <button class="tab active" data-view="discovery">Discovery</button>
-        <button class="tab" data-view="tasks">Tasks</button>
-        <button class="tab" data-view="mcp">MCP tools</button>
-        <button class="tab" data-view="audit">Audit</button>
+        <a class="tab" href="/discovery" data-view="discovery">Discovery</a>
+        <a class="tab" href="/tasks" data-view="tasks">Tasks</a>
+        <a class="tab" href="/mcp" data-view="mcp">MCP tools</a>
+        <a class="tab" href="/audit" data-view="audit">Audit</a>
       </nav>
     </header>
 
     <main>
-      <section id="discovery" class="view active">
+      <section id="discovery" class="view">
         <form id="search-form">
           <input id="query" type="search" value="Acme invoice" aria-label="Search resources" />
           <button type="submit">Search</button>
@@ -96,7 +96,7 @@
       </section>
 
       <section id="mcp" class="view">
-        <h2>Acme Invoice Data — MCP tools</h2>
+        <h2>Acme Invoice Data</h2>
         <p class="note">
           The same credential, a second protocol. Routine data flows freely; the sensitive tool demands a scope, and the
           scope is only granted against a verified presentation.
@@ -104,33 +104,59 @@
           <button id="token-drop" hidden>Drop token</button>
         </p>
         <p class="mcp-engaged" id="mcp-engaged" hidden></p>
+        <p class="connection" id="mcp-connection"></p>
 
+        <section class="chat-panel">
+          <h3>Chat</h3>
+          <p class="note">
+            A model works the tools over MCP. When it reaches the sensitive tool, the step-up happens mid-conversation
+            and the model waits for the person.
+          </p>
+          <p class="note warn" id="chat-unavailable" hidden></p>
+          <ol id="chat-steps" class="timeline chat"></ol>
+          <p id="chat-status" class="note"></p>
+          <form id="chat-form">
+            <input
+              id="chat-input"
+              type="text"
+              placeholder="Which invoices are held?"
+              aria-label="Message"
+              autocomplete="off"
+            />
+            <button type="submit" id="chat-send">Send</button>
+            <button type="button" id="chat-reset">New chat</button>
+          </form>
+        </section>
+
+        <h3>Direct calls</h3>
         <div id="tools" class="cards"></div>
 
-        <div id="mcp-auth" class="auth-panel" hidden>
-          <h3 id="mcp-auth-title">Authorization required</h3>
-          <p class="note" id="mcp-auth-message"></p>
-          <div class="asked" id="mcp-asked"></div>
-          <ol class="steps" id="mcp-steps"></ol>
-          <p class="countdown" id="mcp-countdown"></p>
-          <div class="auth-ways" id="mcp-ways">
-            <div class="auth-way">
-              <h4>Send to the operator’s phone</h4>
-              <p class="note">
-                A DIDComm message to the linked Heka Wallet. The person taps <strong>Share</strong> there.
-              </p>
-              <button id="mcp-send" class="auth-primary" data-send="mcp">Send to wallet</button>
-              <div class="delivery" id="mcp-delivery"></div>
-            </div>
-            <div class="auth-way">
-              <h4>Or scan with Heka Wallet</h4>
-              <div class="qr" id="mcp-qr" role="img" aria-label="OID4VP request QR code"></div>
-              <div class="uri"><code id="mcp-uri"></code><button data-copy="mcp-uri">Copy</button></div>
-            </div>
-            <div class="auth-way auth-secondary">
-              <h4>Or, without a phone</h4>
-              <button id="mcp-simulate">Simulate presentation (demo)</button>
-              <p class="note" id="mcp-simulate-note"></p>
+        <div id="mcp-auth-home">
+          <div id="mcp-auth" class="auth-panel" hidden>
+            <h3 id="mcp-auth-title">Authorization required</h3>
+            <p class="note" id="mcp-auth-message"></p>
+            <div class="asked" id="mcp-asked"></div>
+            <ol class="steps" id="mcp-steps"></ol>
+            <p class="countdown" id="mcp-countdown"></p>
+            <div class="auth-ways" id="mcp-ways">
+              <div class="auth-way">
+                <h4>Send to the operator’s phone</h4>
+                <p class="note">
+                  A DIDComm message to the linked Heka Wallet. The person taps <strong>Share</strong> there.
+                </p>
+                <button id="mcp-send" class="auth-primary" data-send="mcp">Send to wallet</button>
+                <div class="delivery" id="mcp-delivery"></div>
+              </div>
+              <div class="auth-way">
+                <h4>Or scan with Heka Wallet</h4>
+                <div class="qr" id="mcp-qr" role="img" aria-label="OID4VP request QR code"></div>
+                <div class="uri"><code id="mcp-uri"></code><button data-copy="mcp-uri">Copy</button></div>
+              </div>
+              <div class="auth-way auth-secondary">
+                <h4>Or, without a phone</h4>
+                <button id="mcp-simulate">Simulate presentation (demo)</button>
+                <p class="note" id="mcp-simulate-note"></p>
+              </div>
             </div>
           </div>
         </div>
@@ -155,8 +181,8 @@
       <div id="drawer-body"></div>
     </aside>
 
-    <script src="./vendor/qrcode-generator.js"></script>
-    <script src="./ui.js"></script>
-    <script src="./app.js"></script>
+    <script src="/vendor/qrcode-generator.js"></script>
+    <script src="/ui.js"></script>
+    <script src="/app.js"></script>
   </body>
 </html>

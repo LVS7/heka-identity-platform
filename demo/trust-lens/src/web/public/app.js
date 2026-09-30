@@ -6,6 +6,7 @@ const state = {
   wallet: { linked: false },
   config: { trustedIssuers: [], trustedIssuerName: '' },
   taskId: null,
+  query: '',
 }
 
 const { el, escapeHtml } = ui
@@ -93,6 +94,11 @@ async function unlinkWallet() {
 // ---------- discovery ----------
 
 async function search(query) {
+  state.query = query
+  if (el('query').value !== query) el('query').value = query
+  // The query is part of the Discovery address, so a search is a step in the history too.
+  if (el('discovery').classList.contains('active')) syncUrl('discovery')
+
   const response = await fetch(`/api/discovery?q=${encodeURIComponent(query)}`)
   const data = await response.json()
 
@@ -100,6 +106,9 @@ async function search(query) {
   state.verdicts.clear()
 
   el('score-note').textContent = state.results.length ? `Score: ${data.scoreMeaning}` : ''
+  el('empty').textContent = query.trim()
+    ? `No published resource matches “${query.trim()}”.`
+    : 'Search the registry to discover published resources.'
   el('verify-all').disabled = state.results.length === 0
   render()
 }
@@ -576,7 +585,8 @@ async function engage(identifier) {
   if (data.kind === 'mcp') {
     el('mcp-engaged').hidden = false
     el('mcp-engaged').textContent =
-      `${result?.displayName ?? identifier} — re-verified ${ui.formatWhen(data.verifiedAt)} · VERIFIED (${result?.publisher ?? ''}). Verified is not the same as unlocked: the sensitive tool below still demands a scope.`
+      `${result?.displayName ?? identifier} — re-verified ${ui.formatWhen(data.verifiedAt)} · VERIFIED (${result?.publisher ?? ''}). Verified is not the same as unlocked: the sensitive tool below still demands a scope, and every call re-verifies the server.`
+    renderConnection(data.connected)
     showView('mcp')
     return
   }
@@ -641,6 +651,9 @@ function watchTask(taskId) {
       const response = await fetch(`/api/task/${taskId}`)
       if (!response.ok) {
         stopPoller('task')
+        // A stale link (tasks live in memory, so a restart forgets them) lands on the list instead
+        // of an empty page. Replace rather than push: there is nothing to go back to.
+        if (response.status === 404) showView('tasks', true)
         return
       }
       const task = await response.json()
@@ -666,11 +679,47 @@ async function simulatePresentation() {
   }
 }
 
-function showView(name) {
+// ---------- routing ----------
+
+// Every view has a path so it can be linked and reloaded; Discovery carries its query and the open
+// task carries its id. The server answers all of these with the same page, and the tab that owns
+// the path stays highlighted for the task view too, since a task is reached through the Tasks list.
+const VIEW_TITLE = { discovery: 'Discovery', tasks: 'Tasks', task: 'Task', mcp: 'MCP tools', audit: 'Audit' }
+
+function pathFor(name) {
+  if (name === 'task') return `/tasks/${encodeURIComponent(state.taskId)}`
+  if (name === 'discovery' && state.query) return `/discovery?q=${encodeURIComponent(state.query)}`
+  return `/${name}`
+}
+
+/** Bring the address in line with the view. Back/forward and the first load must not add entries. */
+function syncUrl(name, replace = false) {
+  const path = pathFor(name)
+  if (location.pathname + location.search === path) return
+  history[replace ? 'replaceState' : 'pushState'](null, '', path)
+}
+
+/** Open whatever the current URL points at; unknown paths fall back to Discovery. */
+function openPath(pathname, replace = false) {
+  const task = pathname.match(/^\/tasks\/([^/]+)$/)
+  if (task) return watchTask(decodeURIComponent(task[1]))
+  const name = pathname.replace(/^\//, '')
+  if (name in VIEW_TITLE && name !== 'task' && name !== 'discovery') return showView(name, replace)
+
+  // A Discovery address without a query keeps whatever was searched last.
+  const query = new URLSearchParams(location.search).get('q')
+  if (query !== null && query !== state.query) search(query)
+  showView('discovery', replace)
+}
+
+function showView(name, replace = false) {
   document.querySelectorAll('.view').forEach((view) => view.classList.toggle('active', view.id === name))
+  const tab = name === 'task' ? 'tasks' : name
   document
     .querySelectorAll('.tab[data-view]')
-    .forEach((tab) => tab.classList.toggle('active', tab.dataset.view === name))
+    .forEach((link) => link.classList.toggle('active', link.dataset.view === tab))
+  document.title = `Trust Lens · ${VIEW_TITLE[name]}`
+  syncUrl(name, replace)
 
   // The list refreshes only while it is on screen; task and step-up pollers keep running regardless.
   stopPoller('tasks')
@@ -678,15 +727,20 @@ function showView(name) {
   if (name === 'audit') loadAudit()
   if (name === 'mcp') {
     loadTools()
+    startPoller('chat', loadChat, 1500)
     if (mcp.pending && !pollers.has('mcp-auth')) pollAuthorization()
+  } else if (!chat.busy) {
+    stopPoller('chat')
   }
 }
 
 // ---------- MCP tools ----------
 
-// The step-up in progress on this page: which tool to retry, and the authorization as last polled.
+// The step-up in progress on this page: which tool to retry (or that the chat owns it), and the
+// authorization as last polled.
 const mcp = { pending: null }
 const token = { expiresAt: 0 }
+const chat = { busy: false }
 
 const SESSION_STATE = {
   RequestCreated: 'requested',
@@ -694,16 +748,29 @@ const SESSION_STATE = {
   ResponseVerified: 'verified',
 }
 
+function renderConnection(connected) {
+  const line = el('mcp-connection')
+  if (!connected) {
+    line.textContent = ''
+    return
+  }
+  line.innerHTML = `connected to <code>${escapeHtml(connected.url)}</code> (${
+    connected.source === 'verified card' ? 'from the verified card' : 'env fallback'
+  })`
+}
+
 async function loadTools() {
   const response = await fetch('/api/mcp/tools')
   const data = await response.json()
 
   if (!response.ok) {
-    el('tools').innerHTML = `<p class="note">${escapeHtml(data.error)}</p>`
+    el('tools').innerHTML = `<p class="note">${escapeHtml(data.reason ?? data.error)}</p>`
+    if (response.status === 403) renderConnection(null)
     return
   }
 
   renderTokenStatus(data.token)
+  renderConnection(data.connected)
 
   el('tools').innerHTML = (data.tools ?? [])
     .map(
@@ -718,7 +785,7 @@ async function loadTools() {
           <div class="right">
             <button data-tool="${escapeHtml(tool.name)}">Invoke</button>
           </div>
-          <p class="desc">${escapeHtml(tool.description)}</p>
+          <p class="desc">${escapeHtml(tool.description ?? '')}</p>
         </article>`
     )
     .join('')
@@ -750,6 +817,13 @@ function mcpAuthorizationFrom(authorization) {
   }
 }
 
+/** The one auth panel serves the chat and the direct calls: it is moved into the paused chat step, and back. */
+function placeAuthPanel(slot) {
+  const panel = el('mcp-auth')
+  const target = slot ?? el('mcp-auth-home')
+  if (panel.parentElement !== target) target.appendChild(panel)
+}
+
 async function invokeTool(name, { retry = false } = {}) {
   el('mcp-result').hidden = true
   // A settled panel from an earlier step-up is cleared by a fresh Invoke; a live one is joined.
@@ -757,6 +831,7 @@ async function invokeTool(name, { retry = false } = {}) {
     hideAuthPanel('mcp')
     el('mcp-presentation').innerHTML = ''
   }
+  placeAuthPanel(null)
 
   const response = await fetch('/api/mcp/call', {
     method: 'POST',
@@ -771,7 +846,7 @@ async function invokeTool(name, { retry = false } = {}) {
     el('mcp-result').className = 'result'
     el('mcp-result').textContent =
       (by?.role ? `Authorized by ${by.role} · ${by.org}\n\n` : '') +
-      JSON.stringify(data.result?.content ?? data.result, null, 2)
+      JSON.stringify(data.result?.rows ?? data.result, null, 2)
     renderTokenStatus(data.token)
     return
   }
@@ -788,7 +863,9 @@ async function invokeTool(name, { retry = false } = {}) {
 
   el('mcp-result').hidden = false
   el('mcp-result').className = 'result bad'
-  el('mcp-result').textContent = data.error ?? JSON.stringify(data, null, 2)
+  el('mcp-result').textContent = data.verdict
+    ? `refused: ${data.verdict} — ${data.reason}`
+    : (data.error ?? JSON.stringify(data, null, 2))
 }
 
 function pollAuthorization() {
@@ -813,23 +890,37 @@ function pollAuthorization() {
 
       if (response.status === 403) {
         stopPoller('mcp-auth')
+        const { chat: viaChat, authorization } = mcp.pending
+        mcp.pending = null
+        if (viaChat) {
+          // The chat step shows the denial; the server resumes the chat itself, this is belt and braces.
+          hideAuthPanel('mcp')
+          await fetch('/api/chat/resume', { method: 'POST' })
+          loadChat()
+          return
+        }
         el('mcp-auth-title').textContent = 'Authorization denied'
-        showAuthPanel('mcp', { ...mcp.pending.authorization, state: 'denied' }, data.presentation)
+        showAuthPanel('mcp', { ...authorization, state: 'denied' }, data.presentation)
         el('mcp-presentation').innerHTML = presentationCard(data.presentation)
         el('mcp-result').hidden = false
         el('mcp-result').className = 'result bad'
         el('mcp-result').textContent = data.error
-        mcp.pending = null
         return
       }
 
       if (data.granted) {
         stopPoller('mcp-auth')
-        const { tool, authorization } = mcp.pending
+        const { tool, authorization, chat: viaChat } = mcp.pending
         mcp.pending = null
+        renderTokenStatus(data.token)
+        if (viaChat) {
+          hideAuthPanel('mcp')
+          await fetch('/api/chat/resume', { method: 'POST' })
+          loadChat()
+          return
+        }
         el('mcp-auth-title').textContent = 'Authorized'
         showAuthPanel('mcp', { ...authorization, state: 'authorized', delivery: data.delivery }, data.presentation)
-        renderTokenStatus(data.token)
         await invokeTool(tool, { retry: true }) // step-up complete: retry the original call
         el('mcp-presentation').innerHTML = presentationCard(data.presentation)
         return
@@ -870,6 +961,115 @@ async function dropToken() {
   el('mcp-result').className = 'result'
   el('mcp-result').textContent =
     'Cached token dropped. The next sensitive call has to authorize again — against the credential as it stands now.'
+}
+
+// ---------- chat ----------
+
+const CHAT_STATUS = {
+  thinking: 'Thinking…',
+  'calling-tool': 'Calling a tool…',
+  'paused-authorization': 'Paused — the tool needs a scope. Present the credential in the step above.',
+}
+const STEP_TONE = { ok: 'ok', retried: 'ok', paused: 'warn', denied: 'bad', refused: 'bad', error: 'bad', running: '' }
+
+function toolStepText(tool) {
+  const by = tool.authorizedBy
+  switch (tool.status) {
+    case 'running':
+      return 'running…'
+    case 'ok':
+      return `ok · ${escapeHtml(tool.summary ?? '')}`
+    case 'paused':
+      return `paused: ${escapeHtml(tool.summary ?? 'authorization required')}`
+    case 'retried':
+      return `retried · ${by?.role ? `Authorized by ${escapeHtml(by.role)} · ${escapeHtml(by.org ?? '')}` : escapeHtml(tool.summary ?? '')}`
+    default:
+      return escapeHtml(tool.summary ?? tool.status)
+  }
+}
+
+function renderChatStep(step) {
+  const who = step.kind === 'user' ? 'you' : step.kind
+  const when = `<div class="when">${escapeHtml(ui.formatWhen(step.at))} · ${who}</div>`
+  if (step.kind !== 'tool') {
+    return `<li class="${step.kind}">${when}${escapeHtml(step.text ?? '')}</li>`
+  }
+  const tool = step.tool
+  const scope = tool.requiredScope ? `scope ${escapeHtml(tool.requiredScope)}` : 'no scope'
+  return `<li class="tool ${STEP_TONE[tool.status] ?? ''}">
+      ${when}
+      <code>→ ${escapeHtml(tool.name)}</code> · ${scope} · <span class="step-${escapeHtml(tool.status)}">${toolStepText(tool)}</span>
+      ${tool.status === 'paused' ? '<div class="auth-slot"></div>' : ''}
+      ${presentationCard(tool.presentation)}
+    </li>`
+}
+
+async function loadChat() {
+  const response = await fetch('/api/chat')
+  if (!response.ok) return
+  const view = await response.json()
+  renderChat(view)
+}
+
+function renderChat(view) {
+  chat.busy = ['thinking', 'calling-tool', 'paused-authorization'].includes(view.state)
+  el('chat-unavailable').hidden = view.available
+  el('chat-unavailable').textContent = view.available ? '' : view.reason
+  el('chat-send').disabled = !view.available || !view.engaged || chat.busy
+  el('chat-input').disabled = !view.available || !view.engaged
+  el('chat-input').placeholder = view.engaged
+    ? 'Which invoices are held?'
+    : 'Verify and engage Acme Invoice Data on Discovery first'
+
+  const status = el('chat-status')
+  status.className = `note ${view.state === 'error' ? 'text-bad' : ''}`
+  status.textContent = view.state === 'error' ? `Error: ${view.error}` : (CHAT_STATUS[view.state] ?? '')
+
+  // The panel lives inside the transcript while a step is paused; innerHTML would destroy it, so
+  // it goes home before the re-render and into the fresh slot after.
+  placeAuthPanel(null)
+  el('chat-steps').innerHTML = (view.steps ?? []).map(renderChatStep).join('')
+
+  const paused = view.state === 'paused-authorization' && view.authorization
+  if (paused) {
+    if (!mcp.pending?.chat) {
+      el('mcp-auth-title').textContent = `Authorization required — ${view.authorization.scope}`
+      el('mcp-auth-message').textContent = view.authorization.message ?? ''
+      mcp.pending = { chat: true, authorization: mcpAuthorizationFrom(view.authorization) }
+      showAuthPanel('mcp', mcp.pending.authorization, null)
+      pollAuthorization()
+    }
+    placeAuthPanel(el('chat-steps').querySelector('.auth-slot'))
+  }
+}
+
+async function sendChat() {
+  const input = el('chat-input')
+  const message = input.value.trim()
+  if (!message) return
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+  if (response.ok) {
+    input.value = ''
+  } else {
+    const data = await response.json()
+    el('chat-status').className = 'note text-bad'
+    el('chat-status').textContent = data.reason ?? data.error
+  }
+  startPoller('chat', loadChat, 1500)
+}
+
+async function resetChat() {
+  await fetch('/api/chat/reset', { method: 'POST' })
+  if (mcp.pending?.chat) {
+    stopPoller('mcp-auth')
+    mcp.pending = null
+    hideAuthPanel('mcp')
+  }
+  loadChat()
 }
 
 // ---------- audit ----------
@@ -950,14 +1150,26 @@ el('task-back').addEventListener('click', () => showView('tasks'))
 
 el('mcp-simulate').addEventListener('click', simulateMcpPresentation)
 el('token-drop').addEventListener('click', dropToken)
+el('chat-form').addEventListener('submit', (event) => {
+  event.preventDefault()
+  sendChat()
+})
+el('chat-reset').addEventListener('click', resetChat)
 el('tools').addEventListener('click', (event) => {
   const button = event.target.closest('[data-tool]')
   if (button) invokeTool(button.dataset.tool)
 })
 
 document.querySelectorAll('.tab[data-view]').forEach((tab) => {
-  tab.addEventListener('click', () => showView(tab.dataset.view))
+  tab.addEventListener('click', (event) => {
+    // Plain clicks stay in the page; modified clicks keep the link's open-in-new-tab behaviour.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+    event.preventDefault()
+    showView(tab.dataset.view)
+  })
 })
+
+window.addEventListener('popstate', () => openPath(location.pathname, true))
 
 // One clock for everything that counts down: the agent's timeout and the token's lifetime.
 setInterval(() => {
@@ -967,4 +1179,9 @@ setInterval(() => {
 
 loadConfig()
 loadWallet()
-search(el('query').value)
+// The address wins over the input's default query, whichever view it opens on.
+const initialQuery = new URLSearchParams(location.search).get('q')
+search(initialQuery ?? el('query').value)
+// The root has no view of its own; land on Discovery without leaving a spare history entry behind.
+if (location.pathname === '/') history.replaceState(null, '', '/discovery')
+openPath(location.pathname, true)

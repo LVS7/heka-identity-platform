@@ -51,16 +51,17 @@ export function buildAgentCard(resource: DemoResource, agentUrl: string) {
 }
 
 /**
- * The MCP server is a discoverable, verifiable and revocable catalog entry in this demo — its
- * card is published and attested, but no live MCP server is part of this build.
+ * The MCP server's card. Its transport URL is where the Trust Lens connects once the card is
+ * verified — the passport pins the card by digest, so the URL a client trusts is the one the
+ * publisher attested, never one a registry or an env var supplies.
  */
-export function buildMcpServerCard(resource: DemoResource) {
+export function buildMcpServerCard(resource: DemoResource, mcpUrl: string) {
   return {
     name: resource.displayName,
     description: resource.description,
     version: '1.0.0',
     provider: { organization: resource.operator.legalName, url: `https://${resource.domain}` },
-    transport: { type: 'streamable-http', url: `https://${resource.domain}/mcp` },
+    transport: { type: 'streamable-http', url: `${mcpUrl}/mcp` },
     tools: [
       { name: 'invoices-list', description: 'List supplier invoices for a period.' },
       {
@@ -71,15 +72,13 @@ export function buildMcpServerCard(resource: DemoResource) {
   }
 }
 
-export function buildCard(resource: DemoResource, agentUrl: string) {
-  return resource.resourceType === 'a2a-agent' ? buildAgentCard(resource, agentUrl) : buildMcpServerCard(resource)
+export function buildCard(resource: DemoResource, agentUrl: string, mcpUrl: string) {
+  return resource.resourceType === 'a2a-agent'
+    ? buildAgentCard(resource, agentUrl)
+    : buildMcpServerCard(resource, mcpUrl)
 }
 
-export function buildCatalogEntry(
-  resource: DemoResource,
-  identity: string,
-  attestationDigest: string
-): AiCatalogEntry {
+export function buildCatalogEntry(resource: DemoResource, identity: string, attestationDigest: string): AiCatalogEntry {
   return {
     identifier: entryIdentifier(resource),
     displayName: resource.displayName,

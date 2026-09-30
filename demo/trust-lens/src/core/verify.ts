@@ -108,7 +108,11 @@ export async function verifyEntry(
     evidence.didResolved = true
   } catch (error) {
     evidence.didResolved = false
-    return decided(Verdict.NoAttestation, evidence, `could not resolve ${entry.trustManifest.identity}: ${message(error)}`)
+    return decided(
+      Verdict.NoAttestation,
+      evidence,
+      `could not resolve ${entry.trustManifest.identity}: ${message(error)}`
+    )
   }
 
   // 3. Fetch the attestation and bind it to the catalog by digest before trusting its content.
@@ -170,12 +174,14 @@ export async function verifyEntry(
   }
 
   // 5c. Card binding — prevents swapping the card after it was attested.
+  let card: unknown
   if (claims.resource_card_digest && entry.url) {
+    let served: string
     try {
       const response = await fetchFn(entry.url)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const card = await response.text()
-      evidence.cardDigestValid = verifyDigest(card, claims.resource_card_digest)
+      served = await response.text()
+      evidence.cardDigestValid = verifyDigest(served, claims.resource_card_digest)
     } catch (error) {
       evidence.cardDigestValid = false
       return decided(Verdict.DigestMismatch, evidence, `could not fetch the resource card: ${message(error)}`)
@@ -183,6 +189,11 @@ export async function verifyEntry(
 
     if (!evidence.cardDigestValid) {
       return decided(Verdict.DigestMismatch, evidence, 'resource card does not match the digest in its passport')
+    }
+    try {
+      card = JSON.parse(served)
+    } catch {
+      // A digest-bound card that is not JSON is still verified; the client just has nothing to read from it.
     }
   }
 
@@ -207,7 +218,7 @@ export async function verifyEntry(
     return decided(Verdict.Revoked, evidence, 'credential is revoked by its issuer')
   }
 
-  return decided(Verdict.Verified, evidence)
+  return { ...decided(Verdict.Verified, evidence), card }
 }
 
 function message(error: unknown): string {

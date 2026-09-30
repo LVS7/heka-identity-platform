@@ -28,7 +28,7 @@
           {
             "type": "application/vc+sd-jwt",
             "uri": "https://acme-invoices.example/.well-known/attestations/agent-passport.sd-jwt",
-            "digest": "sha256-HdxG4/zeNWuAbZaVVG4dPJ6HKxJAJ6tg6ZmyBmxqP8c="
+            "digest": "sha256-Pn92roLAq72q53mfdCpKQgqKOmq4aCMuunoi6jI+fOI="
           }
         ]
       }
@@ -59,7 +59,7 @@
           {
             "type": "application/vc+sd-jwt",
             "uri": "https://acme-invoices.example/.well-known/attestations/mcp-passport.sd-jwt",
-            "digest": "sha256-dryF4zO6z11JLLeZM4CqfYO4hr9C/KuYovep40SnzVM="
+            "digest": "sha256-s+O7CZ76Yh/7EH+7dSrrHjCYPHDSFpmAmO/g0S7wMu8="
           }
         ]
       }

@@ -130,56 +130,59 @@ sequenceDiagram
 
 Without a phone, **Simulate presentation** drives an in-process holder through the identical exchange.
 
-### Flow 3 — MCP access (OAuth 2.1 scope step-up)
+### Flow 3 — MCP access (OAuth 2.1 scope step-up, driven by a chat)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Op as Operator
     participant W as Heka Wallet
-    participant Lens as Trust Lens<br/>(MCP client)
-    participant MCP as Acme Invoice Data<br/>(OAuth 2.1 resource server)
+    participant LLM as LLM
+    participant Lens as Trust Lens<br/>(MCP client, chat loop)
+    participant MCP as Acme Invoice Data<br/>(MCP server, OAuth 2.1 resource server)
     participant AS as Authorization Server
     participant HIS as Heka Identity Service
 
-    Lens->>MCP: invoices-list
-    MCP-->>Lens: rows — no authorization required
-    Lens->>MCP: suppliers-export-bank-details
-    MCP-->>Lens: 401 WWW-Authenticate with resource_metadata
+    Op->>Lens: Engage the verified MCP entry
+    Lens->>MCP: POST /mcp initialize — the URL from the verified card
+    Op->>Lens: "Export the bank details of the matched suppliers"
+    Lens->>LLM: messages + tools from tools/list
+    LLM-->>Lens: tool request: suppliers-export-bank-details
+    Lens->>Lens: re-verify the entry (the per-call gate)
+    Lens->>MCP: POST /mcp tools/call
+    MCP-->>Lens: 401 WWW-Authenticate with resource_metadata and scope
     Note over MCP: No token means 401.<br/>A token lacking the scope means 403 insufficient_scope.
     Lens->>MCP: GET /.well-known/oauth-protected-resource — RFC 9728
-    MCP-->>Lens: authorization_servers, scopes_supported
     Lens->>AS: GET /.well-known/oauth-authorization-server — RFC 8414
-    AS-->>Lens: endpoints, PKCE S256 required
-    Lens->>AS: GET /authorize — PKCE S256, scope=suppliers:export,<br/>resource indicator naming the MCP server, RFC 8707
+    Lens->>AS: GET /authorize — PKCE S256, scope=suppliers:export,<br/>resource indicator naming the MCP endpoint, RFC 8707
     AS->>HIS: create verification session, same PEX the agent used
-    HIS-->>AS: authorization request
     AS-->>Lens: interaction openid4vp + authorizationRequest<br/>+ session, requested (demo addition)
+    Note over Lens: the chat pauses; the step shows the panel
     Op->>Lens: Send to wallet
     Lens->>W: DIDComm basic message carrying the request
     Op->>W: Share — the same officer credential
     W->>HIS: authorization response, VP
-    HIS-->>AS: ResponseVerified
     AS->>HIS: GET /credentials/status/:id — still live?
     Lens->>AS: GET /authorize/:requestId — polled since the request was issued
-    AS-->>Lens: authorization code, plus iss per RFC 9207<br/>+ presentation (demo addition); pending polls carry the session state
+    AS-->>Lens: authorization code + presentation (demo addition)
     Lens->>AS: POST /token — code, code_verifier, resource
-    AS-->>Lens: access_token — ES256, aud = the MCP server, scope, role, org, 300 s
-    Lens->>MCP: retry the call with the Bearer token
+    AS-->>Lens: access_token — ES256, aud = the MCP endpoint, scope, role, org, 300 s
+    Lens->>MCP: tools/call again, with the Bearer token
     MCP->>AS: GET /jwks
-    MCP->>MCP: verify issuer, audience, expiry, scope
     MCP-->>Lens: bank details + authorizedBy role and org
+    Lens->>LLM: tool response
+    LLM-->>Lens: the answer, naming the three suppliers
 ```
 
-1. **Least privilege per call**: `invoices-list` answers immediately — being verified at discovery is not the same as being unlocked. `suppliers-export-bank-details` answers `401` and names the scope it needs. (A token that exists but lacks that scope gets `403 insufficient_scope` instead.)
-2. **Step-up**: the client walks the spec's own chain — protected resource metadata (RFC 9728) → authorization server metadata (RFC 8414) → authorization with PKCE S256 and an RFC 8707 resource indicator.
-3. **Interaction**: where a login form would be, the authorization server runs an OID4VP presentation asking for the **same officer credential**. The Trust Lens pushes it to the wallet exactly as in the A2A path.
-4. **Grant**: after verifying the presentation and checking the status list, it mints a ~5 minute ES256 token carrying `scope`, `role` and `org`, audience-bound to that one MCP server.
-5. **Retry**: the original call succeeds and the resource server reports `authorizedBy`.
+1. **A real transport**: the server speaks Streamable HTTP at `POST /mcp` ([SDK](https://github.com/modelcontextprotocol/typescript-sdk) server, stateless); the Trust Lens is the SDK client with an `OAuthClientProvider`. The endpoint comes from the **verified** card's `transport.url`, and every call re-verifies the entry — a revoked passport stops MCP calls on the next call, not only on the next Engage.
+2. **Least privilege per call**: `invoices-list` answers immediately — being verified at discovery is not the same as being unlocked. `suppliers-export-bank-details` answers `401` and names the scope it needs in `WWW-Authenticate`. (A token that exists but lacks that scope gets `403 insufficient_scope` instead.)
+3. **Step-up**: the SDK client walks the spec's own chain — protected resource metadata (RFC 9728) → authorization server metadata (RFC 8414) → authorization with PKCE S256 and an RFC 8707 resource indicator. Where a browser would be redirected, the provider performs the GET itself: the AS answers with an OID4VP request instead of a login form.
+4. **Interaction**: the authorization server asks for the **same officer credential**. In the chat the model has paused on that tool; the person presents from the phone, a QR or the simulated holder, exactly as in the A2A path.
+5. **Grant and retry**: after verifying the presentation and checking the status list, the AS mints a ~5 minute ES256 token carrying `scope`, `role` and `org`, audience-bound to that one MCP endpoint. The client exchanges the code (`finishAuth`), retries the same tool request, and the model finishes its answer with `authorizedBy` in hand.
 
-The resource server never sees a credential, a DID or a presentation — it validates a JWT, exactly as any OAuth 2.1 resource server would. That is the point: the composition needs no bespoke wire format, so an ordinary MCP client still works. The audience binding is what makes it safe — the token is useless at any other resource.
+The resource server never sees a credential, a DID or a presentation — it validates a JWT, exactly as any OAuth 2.1 resource server would. The model never sees OAuth — it sees a tool that said "authorization required" and was later answered. That is the point: the composition needs no bespoke wire format, so an ordinary MCP client and an ordinary tool-calling model both work. The audience binding is what makes it safe — the token is useless at any other resource.
 
-The poll answers mirror the A2A extension's demo additions: `pending` carries `session { id, state }`, `granted` and a `403` denial carry `presentation` — the same shape the agent emits — so the Trust Lens renders one card for both paths. A second Invoke while a step-up is pending joins it instead of starting another.
+The chat needs `OPENAI_API_KEY`; without it the MCP tab says so and the **Direct calls** below the chat exercise the same step-up by hand. **Drop token** discards the cached token so the kill switch can be shown without a restart. The poll answers mirror the A2A extension's demo additions: `pending` carries `session { id, state }`, `granted` and a `403` denial carry `presentation`, and a second call while a step-up is pending joins it instead of starting another.
 
 ### Kill switches and audit
 
@@ -239,7 +242,7 @@ cp .env.example .env
 
 Most values match the defaults of a local Heka Identity Service and can be kept as is. Worth knowing about:
 
-- `OPENAI_API_KEY` — optional; the agent narrates the reconciliation if present and produces the same report deterministically if not
+- `OPENAI_API_KEY` — optional; the agent narrates the reconciliation if present and produces the same report deterministically if not. The **chat** in the MCP tab needs it (`OPENAI_MODEL` defaults to `gpt-4o-mini`; `OPENAI_BASE_URL` for a compatible endpoint). The reference demo's key in `demo/a2a-oid4vp/.env` can be reused; never commit it
 - `IDENTITY_SERVICE_URL` — local Identity Service, defaults to `http://localhost:3000`
 - `IDENTITY_SERVICE_ACCESS_TOKEN` — demo token with a very long validity; change it if the instance's JWT configuration differs
 - `HEDERA_OPERATOR_ID` / `HEDERA_OPERATOR_KEY` — default to the development operator committed in Heka Identity Service, so a local instance works out of the box. **Replace before anything real.**
@@ -352,10 +355,10 @@ That must print `4.16.0`. If it prints the failure, fix `REPO` and delete the em
 
 ```bash
 docker run --rm $COMMON node:22-bookworm bash -lc "corepack yarn install"
-docker run --rm $COMMON node:22-bookworm bash -lc "${BRIDGE}corepack yarn seed"
+docker run --rm $COMMON node:22-bookworm bash -lc "${BRIDGE}MCP_PUBLIC_URL=http://trustlens-mcp:4400 corepack yarn seed"
 ```
 
-The seed needs the bridge: Heka mints credential offers pointing at `http://localhost:3003`, which inside a container is the container itself, and the seed claims those offers itself. See [A2](#a2-install-and-seed) for what seeding does and for `--check` / `--reset`.
+The seed needs the bridge: Heka mints credential offers pointing at `http://localhost:3003`, which inside a container is the container itself, and the seed claims those offers itself. It also needs `MCP_PUBLIC_URL`: the MCP card's `transport.url` is written at seed time and the Trust Lens connects to what the verified card says, so on Path B the card must name the container. See [A2](#a2-install-and-seed) for what seeding does and for `--check` / `--reset`.
 
 ### B4. Start the six services
 
@@ -386,7 +389,7 @@ docker run -d --rm --name trustlens-console $COMMON -p 4100:4100 \
   -e TRUSTCO_CONSOLE_PORT=4100 node:22-bookworm bash -lc "${BRIDGE}corepack yarn console"
 ```
 
-The first start takes about a minute while each container installs socat and boots tsx.
+The first start takes about a minute while each container installs socat and boots tsx. The web container needs egress to the LLM endpoint for the chat (`api.openai.com`, or whatever `OPENAI_BASE_URL` names); the `.env` in the mounted repo supplies the key.
 
 Two things carry over from the host setup without extra flags: the wallet link (`.wallet-link.json`, written by either UI) lives in the mounted repo directory, so the web and the console containers share it; and the DIDComm ports (`4010`, `4110`) need no `-p` — delivery to the wallet is outbound only. If Heka advertises your LAN address (see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), the `3003` half of the bridge becomes unnecessary; it does no harm.
 
@@ -440,7 +443,7 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens), **http://loca
 
    Engaging the verified **MCP server** instead takes you to the MCP tools tab: an MCP server is engaged by calling its tools, not by starting a task.
 
-4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. The same card appears above the bank details; the badge counts the token's lifetime down; **Drop token** discards it.
+4. Open **MCP tools** (Engage on the verified _Acme Invoice Data_ card takes you there; the header says `connected to http://localhost:4400/mcp (from the verified card)`). In the **Chat**, ask `Which invoices are held?` → a step `→ invoices-list · no scope · ok · 4 rows` and an answer naming RCH-5540. Ask `Export the bank details of the matched suppliers` → the step `→ suppliers-export-bank-details · scope suppliers:export · paused: authorization required` opens the same three ways to present inside it; present, and the step reads `retried · Authorized by Finance Data Officer · …` with the presentation card, and the model lists three suppliers. **Direct calls** below do the same by hand: Invoke `suppliers-export-bank-details`, present, the call is retried automatically. The badge counts the token's lifetime down; **Drop token** discards it. Without `OPENAI_API_KEY` the chat says `LLM not configured` and the direct calls remain.
 5. In the Console, **revoke** the Finance Data Officer credential.
    - Engage the agent again → the presentation still submits, and the sensitive step is then denied.
    - For the MCP path, press **Drop token** first — a token already minted stays valid for its remaining five minutes, which is how OAuth is meant to behave — then the authorization server refuses to mint a new one.
@@ -589,10 +592,10 @@ A completed task proves nothing on its own: the simulated holder produces the sa
 
 | Component            | Where                            | Role                                                                                                  |
 | -------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP tools, audit                                    |
+| Trust Lens           | `src/web`                        | orchestrator UI: discovery, evidence, agent task, MCP client (SDK) and chat, audit                    |
 | Verification engine  | `src/core`                       | catalog → trustManifest → VC attestation → verdict, plus the audit log                                |
 | Acme Invoice Agent   | `src/agent`                      | A2A agent with OID4VP In-Task Auth; its server view (journal, tasks, authorizations) on the same port |
-| Acme Invoice Data    | `src/mcp/server.ts`              | MCP server as an OAuth 2.1 resource server                                                            |
+| Acme Invoice Data    | `src/mcp/resource-server.ts`     | MCP server (Streamable HTTP) as an OAuth 2.1 resource server                                          |
 | Authorization Server | `src/mcp/auth-server.ts`         | OAuth 2.1 AS whose interaction step is an OID4VP presentation                                         |
 | TrustCo Console      | `src/console`                    | issuer's credential tiles and revoke switches, the officer offer as a QR, and an activity journal     |
 | Publisher sites      | `src/sites.ts`, `static/`        | Acme (genuine) and Pro (lookalike) catalogs, cards, hosted attestations                               |

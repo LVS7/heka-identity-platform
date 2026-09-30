@@ -86,7 +86,33 @@ checking the credential's status.`; the task's `presentation` has `outcome: "aut
 ⚠️ Present promptly: the verification session expires after Credo's default window, and the agent
 gives up after 180s.
 
-## 5. MCP — least privilege per call
+## 5. MCP — least privilege per call, in a chat
+
+Engage first — every MCP call is gated on a fresh verdict of the engaged entry:
+
+```bash
+curl -s -X POST http://localhost:4000/api/engage -H "content-type: application/json" \
+  -d '{"identifier":"urn:air:acme-invoices.example:finance:invoice-data"}'
+```
+
+Expect `kind: mcp`, `verdict: VERIFIED` and `connected: { url: "http://localhost:4400/mcp", source: "verified card" }`.
+Before this, `/api/mcp/tools` and `/api/mcp/call` answer `403 refused: not engaged`.
+
+**Chat** (needs `OPENAI_API_KEY`): ask `Which invoices are held?` → a step
+`→ invoices-list · no scope · ok · 4 rows` and an answer naming Rhein Chemie Handel / RCH-5540. Ask
+`Export the bank details of the matched suppliers` → the step
+`→ suppliers-export-bank-details · scope suppliers:export · paused: authorization required` with the
+panel inside it; present (Send to wallet, the QR, or **Simulate presentation (demo)**) → the step reads
+`retried · Authorized by Finance Data Officer · …`, the presentation card follows, and the answer lists
+three suppliers with IBANs. Ask `Call the tool named delete-everything` → the assistant says there is no
+such tool and no panel opens.
+
+```bash
+curl -s http://localhost:4000/api/chat | jq '{state, steps: [.steps[] | {kind, text, tool: .tool.status}]}'
+curl -s http://localhost:4000/api/audit | jq '.events[0:3]'   # via: "LLM chat"
+```
+
+**Direct calls**, the same chain by hand:
 
 ```bash
 curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application/json" \
@@ -102,7 +128,8 @@ curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application
 ```
 
 Expect `ok: false`, status `401`, `requiredScope: suppliers:export`, and an `authorization` block
-— the client has already walked RFC 9728 → RFC 8414 and started an authorization.
+— the SDK client has already walked RFC 9728 → RFC 8414 and the provider has started an
+authorization.
 
 Present (`POST /api/mcp/send-to-wallet` for the linked wallet, or `POST /api/mcp/simulate-presentation`), then:
 
@@ -119,8 +146,8 @@ Invoking the sensitive tool again while a step-up is pending returns the same `a
 (same QR); the AS logs a single `awaiting a presentation`. With nothing pending the poll answers
 `409`. The token-issued audit entry carries `evidence.presentation`; a denial carries it too.
 
-Worth pointing out when demonstrating: the AS log shows `aud=http://trustlens-mcp:4400` — the
-token is useless at any other resource (RFC 8707).
+Worth pointing out when demonstrating: the AS log shows `aud=http://localhost:4400/mcp` (or the
+container's address on Path B) — the token is useless at any other resource (RFC 8707).
 
 ## 6. Kill switches
 
@@ -142,7 +169,9 @@ curl -s -X POST http://localhost:4100/api/credentials/officer/status \
   ```
 
   Then: sensitive call → `401`, present → `GET /api/mcp/authorization` returns
-  `the Finance Data Officer credential has been revoked by its issuer`, retry → `401`.
+  `the Finance Data Officer credential has been revoked by its issuer`, retry → `401`. In the
+  chat the same run ends with the step `denied: the Finance Data Officer credential has been
+revoked by its issuer` and the assistant saying it cannot export.
 
 The presentation remains cryptographically valid in both cases. What changed is the issuer's
 statement about it — checked by the relying party, because Heka's verifier does not.
@@ -156,7 +185,17 @@ curl -s -X POST http://localhost:4000/api/verify -H "content-type: application/j
 ```
 
 Expect the MCP entry `REVOKED` and the agent still `VERIFIED`. One resource cut off, its
-neighbour untouched, no catalog republished and no registry involved. Restore afterwards.
+neighbour untouched, no catalog republished and no registry involved.
+
+With the entry engaged, the very next call is refused without re-engaging:
+
+```bash
+curl -s -i -X POST http://localhost:4000/api/mcp/call -H "content-type: application/json" -d '{"tool":"invoices-list"}' | head -1
+```
+
+Expect `HTTP/1.1 403` with `"verdict":"REVOKED"` and a new `engagement_refused` audit entry; in the
+chat the tool step reads `refused: REVOKED`. Restore the passport (`{"revoked":false}`) and the same
+call answers `200` — no Engage needed.
 
 ## 7. Audit
 

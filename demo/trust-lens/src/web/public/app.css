@@ -85,6 +85,7 @@ nav {
 }
 
 .tab {
+  display: inline-block;
   background: transparent;
   border: 1px solid var(--line);
   color: var(--muted);
@@ -92,6 +93,7 @@ nav {
   border-radius: var(--radius);
   cursor: pointer;
   font-size: 13px;
+  text-decoration: none;
 }
 
 .tab.active {
@@ -954,4 +956,92 @@ code {
   .offer-body {
     flex-direction: column;
   }
+}
+
+/* ---------- MCP tab: chat first, direct calls below ---------- */
+
+.connection {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 4px 0 14px;
+}
+
+.connection:empty {
+  display: none;
+}
+
+.chat-panel {
+  margin: 8px 0 26px;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.chat-panel h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.note.warn {
+  color: var(--warn);
+}
+
+.timeline.chat {
+  margin-top: 12px;
+}
+
+.timeline.chat:empty {
+  display: none;
+}
+
+.timeline.chat li.user {
+  border-left-color: var(--accent, #7dd3fc);
+}
+
+.timeline.chat li.assistant {
+  white-space: pre-wrap;
+}
+
+.timeline li.warn {
+  border-left-color: var(--warn);
+}
+
+.timeline.chat li.tool code {
+  font-size: 12.5px;
+}
+
+.step-paused {
+  color: var(--warn);
+}
+
+.step-denied,
+.step-refused,
+.step-error {
+  color: var(--bad);
+}
+
+.auth-slot .auth-panel {
+  margin: 12px 0 0;
+}
+
+#chat-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+#chat-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg, transparent);
+  color: inherit;
+  font: inherit;
+}
+
+#chat-status:empty {
+  display: none;
 }

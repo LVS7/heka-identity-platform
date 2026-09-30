@@ -101,15 +101,23 @@ spec's; `authorizationStatus` and `authorizationResult` are demo additions under
 (`src/agent/extension.ts`), built by `src/shared/authorization-result.ts` and carried in-band
 because the client never reads the verifier's session.
 
-**MCP** (`src/mcp`) — the resource server answers `401` (then `403 insufficient_scope` once a
-token exists but lacks the scope), naming the scope in `WWW-Authenticate`. The client walks
-RFC 9728 → RFC 8414 → authorization with PKCE and an RFC 8707 resource indicator. Where a login
-form would be, the AS runs an OID4VP presentation, then mints a ~5 minute JWT carrying the
-verified role, audience-bound to that MCP server. The AS's poll answers mirror the same demo
-additions (`session` while pending, `presentation` on a grant or a denial). The Trust Lens folds
-both paths into one view (`src/web/presentation.ts`), decides the presentation's source (wallet,
-QR, simulated — the relying party cannot tell), and records the presentation with every
-completion, grant and denial in the audit.
+**MCP** (`src/mcp`) — the resource server speaks Streamable HTTP (`POST /mcp`, the SDK server,
+stateless) behind a scope guard: `initialize`, `tools/list` and unscoped tools pass anonymously; a
+scoped `tools/call` answers `401` (then `403 insufficient_scope` once a token exists but lacks the
+scope), naming the scope in `WWW-Authenticate`. The Trust Lens is the SDK client with an
+`OAuthClientProvider` (`src/web/oauth-provider.ts`): the SDK walks RFC 9728 → RFC 8414 →
+authorization with PKCE and an RFC 8707 resource indicator (the endpoint, `…/mcp`), and where a
+browser would be redirected the provider performs the GET itself — the AS runs an OID4VP
+presentation instead of a login form, then mints a ~5 minute JWT carrying the verified role,
+audience-bound to that endpoint. The client connects to the `transport.url` of the **verified**
+card, and every call re-verifies the entry (`src/web/mcp-path.ts`): a revoked passport refuses the
+next call. The chat (`src/web/chat.ts`) is a manual tool loop over the same client: the model's
+tool requests come back to the Trust Lens, a 401/403 pauses the conversation for the person, and
+the grant retries the same request. The AS's poll answers mirror the same demo additions
+(`session` while pending, `presentation` on a grant or a denial). The Trust Lens folds both paths
+into one view (`src/web/presentation.ts`), decides the presentation's source (wallet, QR,
+simulated — the relying party cannot tell), and records the presentation with every completion,
+grant and denial in the audit.
 
 The MCP server and client know nothing about verifiable credentials. That is the point: the
 composition needs no bespoke wire format, so an ordinary MCP client still works.
@@ -140,9 +148,9 @@ is wrong.
 ```
 src/
   core/         verdicts, digests, status lists, audit — no I/O frameworks, fully unit-tested
-  web/          Trust Lens: discovery, verification, A2A task tracking, MCP client, static UI (ui.js and app.css are shared with the console)
+  web/          Trust Lens: discovery, verification, A2A task tracking, MCP client (SDK) and OAuth provider, the MCP path and its gate, the chat loop, static UI (ui.js and app.css are shared with the console)
   agent/        Acme Invoice Agent (A2A + In-Task Auth); journal.ts, state.ts, server-view.ts and public/ for its server view
-  mcp/          MCP resource server and the OAuth 2.1 authorization server
+  mcp/          MCP resource server (Streamable HTTP) and the OAuth 2.1 authorization server
   console/      TrustCo Console
   shared/       Heka client, Credo holder/verifier agents, simulated wallet, demo cast
   seed/         seed state and card/catalog builders

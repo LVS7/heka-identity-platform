@@ -1,62 +1,56 @@
 /**
- * The orchestrator's MCP client, including the step-up authorization flow.
- *
- * It walks the discovery chain the MCP spec defines and nothing else:
+ * The orchestrator's MCP client: the SDK's `Client` over Streamable HTTP, with the step-up
+ * handled by the SDK's own auth chain and our provider (./oauth-provider.ts).
  *
  *   call tool → 401/403 with WWW-Authenticate
  *             → RFC 9728 protected resource metadata (which AS guards this?)
  *             → RFC 8414 authorization server metadata (how do I talk to it?)
  *             → authorization with PKCE + RFC 8707 resource
- *             → [the AS asks for a credential presentation]
- *             → token → retry
- *
- * Note what is absent: any knowledge of verifiable credentials. The client sees an ordinary
- * OAuth interaction it cannot complete on its own, so it surfaces it to the operator. That the
- * interaction happens to be an OID4VP presentation is entirely the authorization server's
- * business — which is the whole argument for composing them this way.
+ *             → [the AS asks for a credential presentation — the provider keeps it pending]
+ *             → poll → code → token → retry
  *
  * What the AS says about the presentation afterwards (`session`, `presentation`) is a demo
  * addition mirrored from the A2A extension; the client passes it through for display and audit.
  */
 
-import { createHash, randomBytes } from 'node:crypto'
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { McpError } from '@modelcontextprotocol/sdk/types.js'
 
-import { InTaskOpenId4VpAuthorizationResult, InTaskOpenId4VpRequested } from '../agent/extension'
-import { presentationFrom, PresentationSource, PresentationView } from './presentation'
-import { DeliveryState } from './wallet-delivery'
+import { InTaskOpenId4VpAuthorizationResult } from '../agent/extension'
+import { PendingAuthorization, TrustLensOAuthProvider } from './oauth-provider'
+import { presentationFrom, PresentationView } from './presentation'
 
-export interface ToolCallOutcome {
-  status: number
-  ok: boolean
-  body: unknown
-  /** Set when the server refused and named a scope we could step up to. */
-  requiredScope?: string
-  resourceMetadataUrl?: string
+export interface McpTool {
+  name: string
+  description?: string
+  /** From the tool's `_meta.requiredScope`; null when the tool needs no elevated scope. */
+  requiredScope: string | null
+  inputSchema: Record<string, unknown>
 }
 
-export interface PendingAuthorization {
-  requestId: string
-  authorizationRequest: string
-  authorizeUrl: string
-  codeVerifier: string
-  redirectUri: string
-  resource: string
-  scope: string
-  startedAt: string
-  message?: string
-  /** Where the verifier session is, as last reported by the AS (demo addition). */
-  session?: { id: string; state: string }
-  /** What the AS asks for, in plain fields (demo addition). */
-  requested?: InTaskOpenId4VpRequested
-  /** Which way the operator chose to present — known only on this side. */
-  source?: PresentationSource
-  /** Last attempt to push the request to the operator's wallet, if any. */
-  delivery?: DeliveryState
+export interface ToolResult {
+  rows: unknown[]
+  authorizedBy?: { role?: string; org?: string }
 }
+
+export type ToolOutcome =
+  | { ok: true; result: ToolResult }
+  | { ok: false; status: 401 | 403; requiredScope: string; pending: PendingAuthorization }
+  | { ok: false; status: 'error'; message: string }
 
 export interface AuthorizationPoll {
   granted: boolean
   session?: { id: string; state: string }
+  presentation?: PresentationView
+}
+
+/** How the last step-up ended; the chat reads it to know whether a paused call may be retried. */
+export interface AuthorizationDecision {
+  at: string
+  granted: boolean
+  reason?: string
   presentation?: PresentationView
 }
 
@@ -71,146 +65,135 @@ export class AuthorizationDeniedError extends Error {
   }
 }
 
-const REDIRECT_URI = 'http://localhost:4000/oauth/callback'
-const CLIENT_ID = 'trust-lens'
-
-function parseChallenge(header: string | null): Record<string, string> {
-  if (!header) return {}
-  const params: Record<string, string> = {}
-  for (const match of header.matchAll(/(\w+)="([^"]*)"/g)) params[match[1]] = match[2]
-  return params
+function textOf(result: unknown): string {
+  const content = (result as { content?: unknown }).content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((part): part is { type: 'text'; text: string } => (part as { type?: string }).type === 'text')
+    .map((part) => part.text)
+    .join('\n')
 }
 
-export class McpClient {
-  private accessToken?: string
-  private tokenExpiresAt = 0
-  private pendingAuthorization?: PendingAuthorization
+export class McpConnection {
+  private client?: Client
+  private transport?: StreamableHTTPClientTransport
+  private serverUrl?: string
+  /** Status of the last refusal seen on the wire — the SDK's UnauthorizedError does not say which. */
+  private lastRefusal: 401 | 403 = 401
+  public lastDecision?: AuthorizationDecision
 
   public constructor(
-    private readonly serverUrl: string,
+    public readonly provider: TrustLensOAuthProvider,
     private readonly fetchFn: typeof fetch = fetch
   ) {}
 
-  public get tokenStatus(): { present: boolean; expiresInSeconds: number } {
-    const remaining = Math.max(0, Math.round((this.tokenExpiresAt - Date.now()) / 1000))
-    return { present: Boolean(this.accessToken) && remaining > 0, expiresInSeconds: remaining }
+  public get url(): string | undefined {
+    return this.serverUrl
   }
 
-  /** The step-up in progress, if any. One at a time: a second Invoke joins it rather than orphaning it. */
+  public get connected(): boolean {
+    return Boolean(this.client)
+  }
+
   public get pending(): PendingAuthorization | undefined {
-    return this.pendingAuthorization
+    return this.provider.pending
+  }
+
+  public get tokenStatus(): { present: boolean; expiresInSeconds: number } {
+    return this.provider.tokenStatus
   }
 
   public forgetToken(): void {
-    this.accessToken = undefined
-    this.tokenExpiresAt = 0
+    this.provider.forgetToken()
   }
 
-  public async listTools(): Promise<Record<string, unknown>> {
-    const response = await this.fetchFn(`${this.serverUrl}/tools`)
-    return (await response.json()) as Record<string, unknown>
+  /** Connect (initialize) to the MCP endpoint. Anonymous: nothing before a scoped tools/call needs a token. */
+  public async connect(url: string): Promise<void> {
+    await this.close()
+    const observe: typeof fetch = async (input, init) => {
+      const response = await this.fetchFn(input, init)
+      if (response.status === 401 || response.status === 403) this.lastRefusal = response.status
+      return response
+    }
+    const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider: this.provider, fetch: observe })
+    const client = new Client({ name: 'trust-lens', version: '1.0.0' })
+    await client.connect(transport)
+    this.client = client
+    this.transport = transport
+    this.serverUrl = url
   }
 
-  public async callTool(name: string): Promise<ToolCallOutcome> {
-    const headers: Record<string, string> = {}
-    if (this.accessToken && Date.now() < this.tokenExpiresAt) {
-      headers.authorization = `Bearer ${this.accessToken}`
-    }
+  public async close(): Promise<void> {
+    const client = this.client
+    this.client = undefined
+    this.transport = undefined
+    this.serverUrl = undefined
+    await client?.close().catch(() => undefined)
+  }
 
-    const response = await this.fetchFn(`${this.serverUrl}/tools/${name}`, { method: 'POST', headers })
-    const body = await response.json().catch(() => ({}))
+  private requireClient(): Client {
+    if (!this.client) throw new Error('not connected to an MCP server — engage the MCP entry first')
+    return this.client
+  }
 
-    if (response.ok) return { status: response.status, ok: true, body }
-
-    const challenge = parseChallenge(response.headers.get('www-authenticate'))
-    return {
-      status: response.status,
-      ok: false,
-      body,
-      requiredScope: challenge.scope,
-      resourceMetadataUrl: challenge.resource_metadata,
-    }
+  public async listTools(): Promise<McpTool[]> {
+    const { tools } = await this.requireClient().listTools()
+    return tools.map((tool) => {
+      const meta = (tool._meta ?? {}) as { requiredScope?: unknown }
+      return {
+        name: tool.name,
+        description: tool.description,
+        requiredScope: typeof meta.requiredScope === 'string' ? meta.requiredScope : null,
+        inputSchema: tool.inputSchema as Record<string, unknown>,
+      }
+    })
   }
 
   /**
-   * Begin a step-up: discover the AS, then start an authorization the operator must satisfy.
-   * A step-up already pending for the same scope and resource is returned as is — the AS would
-   * otherwise accumulate requests nobody will ever answer.
+   * Call a tool. A 401/403 has already been turned into a pending step-up by the SDK and the
+   * provider by the time the UnauthorizedError arrives here; a tool error (unknown tool, bad
+   * arguments) is reported as such and never starts a step-up.
    */
-  public async beginAuthorization(outcome: ToolCallOutcome): Promise<PendingAuthorization> {
-    const metadataUrl = outcome.resourceMetadataUrl ?? `${this.serverUrl}/.well-known/oauth-protected-resource`
-    const resourceMetadata = (await (await this.fetchFn(metadataUrl)).json()) as {
-      resource: string
-      authorization_servers: string[]
+  public async callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolOutcome> {
+    try {
+      const result = await this.requireClient().callTool({ name, arguments: args })
+      if (result.isError) return { ok: false, status: 'error', message: textOf(result) || 'tool error' }
+      const parsed = JSON.parse(textOf(result)) as ToolResult
+      return { ok: true, result: parsed }
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        const pending = this.provider.pending
+        if (!pending) {
+          return { ok: false, status: 'error', message: 'authorization required, but no step-up could be started' }
+        }
+        return { ok: false, status: this.lastRefusal, requiredScope: pending.scope, pending }
+      }
+      if (error instanceof McpError) return { ok: false, status: 'error', message: error.message }
+      throw error
     }
-    const scope = outcome.requiredScope ?? 'suppliers:export'
-
-    const pending = this.pendingAuthorization
-    if (pending && pending.scope === scope && pending.resource === resourceMetadata.resource) return pending
-
-    const authorizationServer = resourceMetadata.authorization_servers[0]
-    const asMetadata = (await (
-      await this.fetchFn(`${authorizationServer}/.well-known/oauth-authorization-server`)
-    ).json()) as { authorization_endpoint: string; token_endpoint: string }
-
-    // PKCE: the verifier never leaves this process.
-    const codeVerifier = randomBytes(32).toString('base64url')
-    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
-
-    const authorizeUrl = new URL(asMetadata.authorization_endpoint)
-    authorizeUrl.searchParams.set('client_id', CLIENT_ID)
-    authorizeUrl.searchParams.set('response_type', 'code')
-    authorizeUrl.searchParams.set('redirect_uri', REDIRECT_URI)
-    authorizeUrl.searchParams.set('code_challenge', codeChallenge)
-    authorizeUrl.searchParams.set('code_challenge_method', 'S256')
-    authorizeUrl.searchParams.set('scope', scope)
-    // RFC 8707 — bind the token to this resource, so it is useless anywhere else.
-    authorizeUrl.searchParams.set('resource', resourceMetadata.resource)
-
-    const started = (await (await this.fetchFn(authorizeUrl.toString())).json()) as {
-      requestId: string
-      authorizationRequest: string
-      message?: string
-      session?: { id: string; state: string }
-      requested?: InTaskOpenId4VpRequested
-    }
-
-    this.pendingAuthorization = {
-      requestId: started.requestId,
-      authorizationRequest: started.authorizationRequest,
-      authorizeUrl: authorizeUrl.origin,
-      codeVerifier,
-      redirectUri: REDIRECT_URI,
-      resource: resourceMetadata.resource,
-      scope,
-      startedAt: new Date().toISOString(),
-      message: started.message,
-      session: started.session,
-      requested: started.requested,
-    }
-    return this.pendingAuthorization
   }
 
   /**
    * Ask the AS whether the presentation has landed. `granted: false` while still waiting (with
-   * the session's state); throws `AuthorizationDeniedError` when the AS refuses (a revoked
-   * credential arrives here). Any outcome other than "still waiting" ends the pending step-up.
+   * the session's state); on a grant the code is exchanged through the SDK (`finishAuth`, with
+   * the saved verifier) and the pending entry cleared; a refusal throws `AuthorizationDeniedError`
+   * (a revoked credential arrives here). Any outcome other than "still waiting" ends the step-up.
    */
-  public async completeAuthorization(): Promise<AuthorizationPoll> {
-    const pending = this.pendingAuthorization
+  public async pollAuthorization(): Promise<AuthorizationPoll> {
+    const pending = this.provider.pending
     if (!pending) throw new Error('no authorization is in progress')
 
     try {
       return await this.poll(pending)
     } catch (error) {
-      this.pendingAuthorization = undefined
+      this.provider.clearPending()
       throw error
     }
   }
 
   private async poll(pending: PendingAuthorization): Promise<AuthorizationPoll> {
-    const response = await this.fetchFn(`${pending.authorizeUrl}/authorize/${pending.requestId}`)
-    const body = (await response.json()) as {
+    const response = await this.fetchFn(`${pending.authorizeOrigin}/authorize/${pending.requestId}`)
+    const body = (await response.json().catch(() => ({}))) as {
       status?: string
       code?: string
       error_description?: string
@@ -220,44 +203,23 @@ export class McpClient {
 
     // A token that arrived with nothing pressed on this side was scanned from the QR.
     const source = pending.source ?? 'qr'
+    const presentation = body.presentation && presentationFrom(body.presentation, source)
 
     if (response.status === 403) {
-      throw new AuthorizationDeniedError(
-        body.error_description ?? 'authorization denied',
-        body.presentation && presentationFrom(body.presentation, source)
-      )
+      const reason = body.error_description ?? 'authorization denied'
+      this.lastDecision = { at: new Date().toISOString(), granted: false, reason, presentation }
+      throw new AuthorizationDeniedError(reason, presentation)
     }
+    if (!response.ok) throw new Error(body.error_description ?? `the authorization server answered ${response.status}`)
     if (body.status !== 'granted' || !body.code) {
       if (body.session) pending.session = body.session
       return { granted: false, session: pending.session }
     }
 
-    const tokenResponse = await this.fetchFn(`${pending.authorizeUrl}/token`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: body.code,
-        code_verifier: pending.codeVerifier,
-        redirect_uri: pending.redirectUri,
-        resource: pending.resource,
-      }),
-    })
-
-    const token = (await tokenResponse.json()) as {
-      access_token?: string
-      expires_in?: number
-      error_description?: string
-    }
-    if (!token.access_token) throw new Error(token.error_description ?? 'token request failed')
-
-    this.accessToken = token.access_token
-    this.tokenExpiresAt = Date.now() + (token.expires_in ?? 300) * 1000
-    this.pendingAuthorization = undefined
-    return {
-      granted: true,
-      session: body.session ?? pending.session,
-      presentation: body.presentation && presentationFrom(body.presentation, source),
-    }
+    if (!this.transport) throw new Error('not connected to an MCP server')
+    await this.transport.finishAuth(body.code)
+    this.provider.clearPending()
+    this.lastDecision = { at: new Date().toISOString(), granted: true, presentation }
+    return { granted: true, session: body.session ?? pending.session, presentation }
   }
 }

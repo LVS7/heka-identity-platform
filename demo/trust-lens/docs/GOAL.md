@@ -67,6 +67,7 @@ riskiest unknowns were settled before anything was built on them.
 | **2 — Verification (M1)**         | The part that decides trust                           | `src/core` engine, all nine verdicts unit-tested; Trust Lens UI with discovery, evidence and audit                                                                                      |
 | **3 — A2A (M2)**                  | Human-in-the-loop authorization                       | Agent pauses on `auth-required`, resumes on a verified presentation, refuses a revoked credential                                                                                       |
 | **4 — MCP + console (M3)**        | Second protocol, and the issuer's side                | OAuth 2.1 resource server, AS with an OID4VP interaction, TrustCo Console                                                                                                               |
+| **5 — MCP as a real transport**   | The MCP path driven by a model                        | Streamable HTTP server, the SDK client with an OAuth provider, a per-call verification gate, and a chat whose tool call pauses for the person. The LLM is optional everywhere else      |
 
 Two unknowns turned out to matter more than expected and are worth knowing about:
 
@@ -87,8 +88,5 @@ Two unknowns turned out to matter more than expected and are worth knowing about
   generator. Discovery reads the publishers directly instead, returning the same shape the
   registry contract does. This costs realism, not trust: the registry is a directory, and every
   verdict re-fetches from the publisher regardless.
-- **A real MCP transport.** The MCP server speaks plain HTTP with the OAuth semantics the spec
-  requires, rather than the streamable-HTTP MCP transport. The authorization story is faithful;
-  the transport is simplified.
 - **Production hygiene.** Development keys are committed, credential state is in memory, and the
   AS has no consent screen beyond the presentation itself.

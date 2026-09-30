@@ -143,9 +143,13 @@ outbound, so the ports need no `-p`; they just must not collide. The link itself
 ```bash
 curl -s "http://localhost:4000/api/discovery?q=Acme%20invoice"   # 3 results
 curl -s http://localhost:4100/api/credentials                    # 3 credential tiles
-curl -s http://localhost:4000/api/mcp/tools                      # 2 tools
+curl -s -X POST http://localhost:4400/mcp -H "content-type: application/json" -H "accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'   # 2
+curl -s http://localhost:4000/api/chat | jq '{available, model}'   # true, "gpt-4o-mini" (false without a key)
 curl -s http://localhost:10003/health                            # {"ok":true,…,"channel":{"state":"open",…}}
 ```
+
+`GET /api/mcp/tools` answers 403 until the MCP entry is engaged (Discovery → Verify all → Engage
+_Acme Invoice Data_, or `POST /api/engage` with its identifier).
 
 Then `yarn verify:live` — the fastest real confidence check, exercising did:hedera resolution,
 SD-JWT verification, digests and status lists in one pass. Expect `VERIFIED`, `VERIFIED`,

@@ -1,0 +1,3 @@
+# Digest-bound publisher artifacts: the passports pin these bytes, so git must never
+# normalise their line endings on checkout.
+static/** -text

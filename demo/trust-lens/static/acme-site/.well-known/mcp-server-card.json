@@ -8,7 +8,7 @@
   },
   "transport": {
     "type": "streamable-http",
-    "url": "https://acme-invoices.example/mcp"
+    "url": "http://localhost:4400/mcp"
   },
   "tools": [
     {

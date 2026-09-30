@@ -82,8 +82,6 @@ The full stack plus an emulator plus the registry does not fit in 16 GB. Run wha
 - **Registry ingestion does not run** — upstream nginx template is out of sync with its
   generator. See [spec/ADR-002](spec/ADR-002-registry-integration.md). Discovery reads publishers
   directly, which changes nothing about trust.
-- **The MCP transport is simplified** — plain HTTP with the spec's OAuth semantics rather than the
-  streamable-HTTP MCP transport. The authorization story is faithful.
 - **The wallet connection is forged, not negotiated.** `src/shared/wallet-link.ts` saves a
   `Completed` connection record pointing at the wallet's public `did:peer:2` and sends basic
   messages to it, as the reference demo does. Real DID Exchange waits on the wallet.

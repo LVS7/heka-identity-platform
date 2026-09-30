@@ -22,9 +22,11 @@ import { identityServiceFromEnv } from '../shared/identity-service'
 import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
 import { credoWalletTransport } from '../shared/wallet-link-credo'
 import { loadState } from '../seed/state'
-import { AuthorizationDeniedError, McpClient } from './mcp-client'
+import { llmConfigFromEnv } from './llm'
+import { McpConnection } from './mcp-client'
+import { McpPath } from './mcp-path'
+import { TrustLensOAuthProvider } from './oauth-provider'
 import { TaskTracker } from './tasks'
-import { deliverToWallet } from './wallet-delivery'
 
 dotenv.config()
 
@@ -64,6 +66,9 @@ function relevance(entry: AiCatalogEntry, query: string): number {
     .toLowerCase()
 
   const hits = terms.filter((term) => haystack.includes(term)).length
+  // No hit at all is not a weak match, it is no match: the caller drops a zero score. The type
+  // bonus only breaks ties among entries that did match.
+  if (!hits) return 0
   return Math.round((hits / terms.length) * 90) + (entry.type.includes('a2a') ? 3 : 1)
 }
 
@@ -91,7 +96,7 @@ function main() {
 
   const audit = new AuditLog()
   const tasks = new TaskTracker(AGENT_URL, audit, identityServiceFromEnv())
-  const mcp = new McpClient(MCP_URL)
+  const mcp = new McpConnection(new TrustLensOAuthProvider())
   // The operator's phone. Credo is only brought up on first use, so a stand without a wallet
   // pays nothing for this.
   const walletLink = new WalletLink({
@@ -122,9 +127,26 @@ function main() {
     return { trustedIssuers: [state.issuerDid as string], ...verifierDependencies(agent) }
   }
 
+  const mcpPath = new McpPath({
+    audit,
+    mcp,
+    tasks,
+    walletLink,
+    discover: () => discover(''),
+    verifierOptions,
+    envMcpUrl: MCP_URL,
+  })
+
   const app = express()
   app.use(express.json())
-  app.use(express.static(resolve(process.cwd(), 'src/web/public')))
+  const publicDir = resolve(process.cwd(), 'src/web/public')
+  app.use(express.static(publicDir))
+
+  // Each view has a path so it can be linked, reloaded and reached with the browser's back button.
+  // They are all the same single page; the client reads the path and opens the view.
+  app.get(['/discovery', '/tasks', '/tasks/:id', '/mcp', '/audit'], (_req, res) => {
+    res.sendFile(resolve(publicDir, 'index.html'))
+  })
 
   app.get('/api/config', (_req, res) => {
     res.json({
@@ -242,8 +264,10 @@ function main() {
 
       const preflight = { verdict: result.verdict, auditId: verification.id, verifiedAt: result.verifiedAt }
       if (!target.entry.type.includes('a2a')) {
-        // An MCP server is engaged by calling its tools; the verdict is what the tab shows.
-        res.json({ ok: true, kind: 'mcp', ...preflight })
+        // An MCP server is engaged by connecting to what its verified card says and calling its
+        // tools; from here on every call re-verifies the entry (the gate in mcp-path.ts).
+        const connected = await mcpPath.engage(target.entry, target.servingDomain, result.card)
+        res.json({ ok: true, kind: 'mcp', ...preflight, connected })
         return
       }
 
@@ -323,152 +347,9 @@ function main() {
 
   // ---------- MCP path ----------
 
-  app.get('/api/mcp/tools', async (_req, res) => {
-    try {
-      res.json({ ...(await mcp.listTools()), token: mcp.tokenStatus })
-    } catch (error) {
-      res.status(502).json({ error: `MCP server unreachable: ${(error as Error).message}` })
-    }
-  })
-
-  app.post('/api/mcp/call', async (req, res) => {
-    const tool = String(req.body?.tool ?? '')
-
-    try {
-      const outcome = await mcp.callTool(tool)
-
-      if (outcome.ok) {
-        audit.record('authorization', `MCP · ${tool}`, 'tool call succeeded', {
-          authorizedBy: (outcome.body as { authorizedBy?: unknown })?.authorizedBy,
-        })
-        res.json({ ok: true, result: outcome.body, token: mcp.tokenStatus })
-        return
-      }
-
-      // The server refused and named a scope: begin a step-up the operator can satisfy.
-      audit.record(
-        'denial',
-        `MCP · ${tool}`,
-        `refused: ${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'}`,
-        {
-          requiredScope: outcome.requiredScope,
-        }
-      )
-
-      const pending = await mcp.beginAuthorization(outcome)
-      res.json({
-        ok: false,
-        status: outcome.status,
-        requiredScope: outcome.requiredScope,
-        authorization: {
-          request: pending.authorizationRequest,
-          message: pending.message,
-          scope: pending.scope,
-          resource: pending.resource,
-          session: pending.session,
-          requested: pending.requested,
-          source: pending.source,
-          delivery: pending.delivery,
-        },
-      })
-    } catch (error) {
-      res.status(502).json({ error: (error as Error).message })
-    }
-  })
-
-  /** Push the AS's OID4VP request to the operator's phone over DIDComm. */
-  app.post('/api/mcp/send-to-wallet', async (_req, res) => {
-    const pending = mcp.pending
-    if (!pending) {
-      res.status(409).json({ error: 'no authorization is in progress' })
-      return
-    }
-    if (!walletLink.status.linked) {
-      res.status(409).json({ error: 'no wallet linked — paste the wallet’s Public DID first' })
-      return
-    }
-
-    pending.source = 'wallet'
-    pending.delivery = await deliverToWallet({
-      subject: `MCP · ${pending.scope}`,
-      content: pending.authorizationRequest,
-      deliver: (content) => walletLink.send(content),
-      audit,
-      previous: pending.delivery,
-    })
-    res.status(pending.delivery.state === 'sent' ? 200 : 502).json({ delivery: pending.delivery })
-  })
-
-  /**
-   * Present the officer credential to the AS from the in-process holder. Labelled as simulated in
-   * the UI and in the audit, exactly as the A2A route is — who presented is the subject of the demo.
-   */
-  app.post('/api/mcp/simulate-presentation', async (_req, res) => {
-    const pending = mcp.pending
-    if (!pending) {
-      res.status(409).json({ error: 'no authorization is in progress' })
-      return
-    }
-
-    try {
-      // Set before presenting: the next poll may land before `present` returns.
-      pending.source = 'simulated'
-      await tasks.presentToAuthorizationServer(pending.authorizationRequest)
-      audit.record('authorization', `MCP · ${pending.scope}`, 'presentation submitted (simulated holder)', {
-        note: 'in-process holder, not the operator’s phone',
-      })
-      res.json({ ok: true })
-    } catch (error) {
-      res.status(500).json({ error: (error as Error).message })
-    }
-  })
-
-  /** Poll the AS, exchange the code, and report whether a token was obtained — and against what. */
-  app.get('/api/mcp/authorization', async (_req, res) => {
-    const pending = mcp.pending
-    if (!pending) {
-      res.status(409).json({ error: 'no authorization is in progress' })
-      return
-    }
-
-    try {
-      const poll = await mcp.completeAuthorization()
-      if (poll.granted) {
-        audit.record('authorization', `MCP · ${pending.scope}`, 'scoped token issued against a verified presentation', {
-          ttlSeconds: mcp.tokenStatus.expiresInSeconds,
-          resource: pending.resource,
-          presentation: poll.presentation,
-        })
-      }
-      res.json({
-        granted: poll.granted,
-        token: mcp.tokenStatus,
-        delivery: pending.delivery,
-        session: poll.session,
-        presentation: poll.presentation,
-      })
-    } catch (error) {
-      const message = (error as Error).message
-      const presentation = error instanceof AuthorizationDeniedError ? error.presentation : undefined
-      audit.record('denial', `MCP · ${pending.scope}`, message, presentation ? { presentation } : undefined)
-      res.status(403).json({ error: message, presentation })
-    }
-  })
-
-  /**
-   * Drop the cached access token. Revoking a credential stops the *next* grant — a token already
-   * minted stays valid until it expires, exactly as OAuth intends — so showing the kill switch
-   * means getting rid of the token first. This used to require restarting the process.
-   */
-  app.delete('/api/mcp/token', (_req, res) => {
-    const before = mcp.tokenStatus
-    mcp.forgetToken()
-    audit.record('authorization', 'MCP · token', 'cached access token dropped by the operator', {
-      hadToken: before.present,
-      expiresInSeconds: before.expiresInSeconds,
-    })
-    res.json({ token: mcp.tokenStatus })
-  })
+  mcpPath.mount(app)
+  // The model is optional; without a key the chat says so and the direct calls remain.
+  void mcpPath.startChat(llmConfigFromEnv())
 
   app.get('/api/audit', (req, res) => {
     const type = req.query.type ? String(req.query.type) : undefined
