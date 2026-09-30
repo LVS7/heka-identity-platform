@@ -27,6 +27,8 @@ export interface TrackedTask {
   resource: string
   state: string
   events: TaskEvent[]
+  /** The verification the Trust Lens ran at engagement time — the verdict the browser held is never trusted. */
+  preflight?: { verdict: string; auditId: string; verifiedAt: string }
   /** Present only while the agent is waiting for a presentation. */
   authorizationRequest?: string
   /** Last attempt to push the request to the operator's wallet, if any. */
@@ -49,9 +51,9 @@ export class TaskTracker {
     return this.tasks.get(id)
   }
 
-  public async start(resource: string, prompt: string): Promise<TrackedTask> {
+  public async start(resource: string, prompt: string, preflight?: TrackedTask['preflight']): Promise<TrackedTask> {
     const client = new A2AClient(this.agentUrl)
-    const task: TrackedTask = { id: randomUUID(), resource, state: 'submitted', events: [] }
+    const task: TrackedTask = { id: randomUUID(), resource, state: 'submitted', events: [], preflight }
     this.tasks.set(task.id, task)
 
     const message: Message = {

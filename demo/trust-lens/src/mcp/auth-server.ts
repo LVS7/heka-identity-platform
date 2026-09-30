@@ -21,11 +21,18 @@ import * as dotenv from 'dotenv'
 import express from 'express'
 import { exportJWK, generateKeyPair, SignJWT, type JWK, type CryptoKey } from 'jose'
 
-import { checkCredentialStatus } from '../core/status-list'
 import { ROLE_CREDENTIAL_VCT } from '../core/types'
 import { loadState } from '../seed/state'
 import { OFFICER_CREDENTIAL } from '../shared/demo-config'
 import { identityServiceFromEnv, IdentityServiceClient } from '../shared/identity-service'
+import {
+  assertPresentedCredentialValid,
+  PresentationRefused,
+  PresentedCredential,
+  readPresentedCredential,
+  StatusCheck,
+  statusListOriginOf,
+} from '../shared/presented-credential'
 
 dotenv.config()
 
@@ -52,6 +59,8 @@ interface PendingAuthorization {
 
 interface IssuedCode {
   authorization: PendingAuthorization
+  presented: PresentedCredential
+  status: StatusCheck
   claims: { role: string; org: string }
 }
 
@@ -68,7 +77,7 @@ const OFFICER_PRESENTATION_DEFINITION = {
         limit_disclosure: 'required',
         fields: [
           { path: ['$.vct'], filter: { type: 'string', enum: [ROLE_CREDENTIAL_VCT] } },
-          { path: ['$.role'], filter: { type: 'string' } },
+          { path: ['$.role'], filter: { type: 'string', enum: [OFFICER_CREDENTIAL.role] } },
           { path: ['$.org'], filter: { type: 'string' } },
         ],
       },
@@ -150,29 +159,65 @@ class AuthorizationServer {
   /**
    * Complete an authorization once the presentation has been verified.
    *
-   * Two checks the verifier does not do for us: that the session actually reached
-   * ResponseVerified, and that the credential behind it has not been revoked. Skipping the
-   * second would make the officer credential's revocation meaningless on this path.
+   * Heka confirms the presentation is sound; whose credential it is, of what type, and whether
+   * it is still live is this server's decision (src/shared/presented-credential.ts). Skipping
+   * that would make the officer credential's revocation meaningless on this path.
    */
   public async completeAuthorization(requestId: string): Promise<{ code: string; redirectTo: string }> {
     const authorization = this.pending.get(requestId)
     if (!authorization) throw new Error('unknown or expired authorization request')
 
-    const session = await this.identityService.getVerificationSession(authorization.verificationSessionId)
-    if (session.state !== 'ResponseVerified') {
-      throw new Error(`no verified presentation yet (session is ${session.state})`)
+    const trustedIssuer = loadState().issuerDid
+    if (!trustedIssuer) {
+      this.pending.delete(requestId)
+      throw new Error('no trusted issuer configured — run `yarn seed`')
     }
 
-    await this.assertCredentialNotRevoked()
-
-    const shared = (session.sharedAttributes ?? {}) as Record<string, unknown>
-    const claims = {
-      role: String(shared.role ?? OFFICER_CREDENTIAL.role),
-      org: String(shared.org ?? OFFICER_CREDENTIAL.org),
+    // Possibly unset in the catch: a refusal logs the status pointer only when one was read.
+    let presented: PresentedCredential | undefined
+    let status: StatusCheck
+    try {
+      presented = readPresentedCredential(
+        await this.identityService.getVerificationSession(authorization.verificationSessionId)
+      )
+      status = await assertPresentedCredentialValid(
+        presented,
+        {
+          trustedIssuers: [trustedIssuer],
+          requiredVct: ROLE_CREDENTIAL_VCT,
+          statusListOrigin: this.identityService.baseOrigin,
+          credentialLabel: OFFICER_CREDENTIAL.role,
+          requiredClaims: { role: OFFICER_CREDENTIAL.role },
+        },
+        fetch
+      )
+    } catch (error) {
+      // "Not yet" is a normal poll result and the request stays open. Any other refusal is a
+      // decision: the request is over, so a later poll cannot re-ask and get a different answer.
+      if (error instanceof PresentationRefused && error.reason !== 'not-verified') {
+        this.pending.delete(requestId)
+        if (error.reason === 'revoked' && presented?.credentialStatus) {
+          const { statusListIndex, statusListCredential } = presented.credentialStatus
+          console.log(`[as] status checked: index ${statusListIndex} on ${statusListCredential} -> revoked`)
+        }
+        if (error.reason === 'foreign-status-list' && presented?.credentialStatus) {
+          const origin = statusListOriginOf(presented.credentialStatus) ?? '(not a URL)'
+          console.log(`[as] status list origin ${origin} is not ${this.identityService.baseOrigin}`)
+        }
+        console.log(`[as] authorization ${requestId.slice(0, 8)} refused (${error.reason}): ${error.message}`)
+      }
+      throw error
     }
+
+    const { role, org } = presented.claims
+    if (typeof role !== 'string' || typeof org !== 'string') {
+      this.pending.delete(requestId)
+      throw new Error('the presentation did not disclose role and org')
+    }
+    const claims = { role, org }
 
     const code = randomUUID()
-    this.codes.set(code, { authorization, claims })
+    this.codes.set(code, { authorization, presented, status, claims })
     this.pending.delete(requestId)
 
     const redirectTo = new URL(authorization.redirectUri)
@@ -182,21 +227,6 @@ class AuthorizationServer {
 
     console.log(`[as] authorization ${requestId.slice(0, 8)} granted to ${claims.role}`)
     return { code, redirectTo: redirectTo.toString() }
-  }
-
-  private async assertCredentialNotRevoked(): Promise<void> {
-    const state = loadState()
-    if (!state.statusListId || state.statusIndexes.officer === undefined) return
-
-    const revoked = await checkCredentialStatus(
-      {
-        statusListCredential: this.identityService.statusListUrl(state.statusListId),
-        statusListIndex: state.statusIndexes.officer,
-      },
-      fetch
-    )
-
-    if (revoked) throw new Error(`the ${OFFICER_CREDENTIAL.role} credential has been revoked by its issuer`)
   }
 
   /** Exchange a code for an access token, verifying PKCE. */

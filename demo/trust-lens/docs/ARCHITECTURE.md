@@ -7,12 +7,12 @@ for why this exists.
 
 Four parties, mirroring a real supply relationship.
 
-| Party | Identity | Role |
-|---|---|---|
-| **TrustCo** | `did:hedera` (seeded) | Certification body. Issues Resource Passports and the officer role credential; owns the status list |
-| **Acme** (`acme-invoices.example`) | one `did:hedera` per resource | Genuine publisher of two independent resources: an A2A agent and an MCP server |
-| **Pro** (`acme-invoices-ai.example`) | its own `did:hedera` | Lookalike publisher. Spec-valid catalog, plausible domain, and a **genuine** TrustCo credential that belongs to Acme's agent |
-| **Operator** | wallet holder binding | The human. Holds a Finance Data Officer credential |
+| Party                                | Identity                      | Role                                                                                                                         |
+| ------------------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **TrustCo**                          | `did:hedera` (seeded)         | Certification body. Issues Resource Passports and the officer role credential; owns the status list                          |
+| **Acme** (`acme-invoices.example`)   | one `did:hedera` per resource | Genuine publisher of two independent resources: an A2A agent and an MCP server                                               |
+| **Pro** (`acme-invoices-ai.example`) | its own `did:hedera`          | Lookalike publisher. Spec-valid catalog, plausible domain, and a **genuine** TrustCo credential that belongs to Acme's agent |
+| **Operator**                         | wallet holder binding         | The human. Holds a Finance Data Officer credential                                                                           |
 
 Acme's two resources are deliberately modelled as **independent**: separately listed, separately
 attested, separately revocable. That is what makes per-resource granularity demonstrable.
@@ -80,7 +80,7 @@ pinning the passports.
 6. status list — is the credential revoked right now
 
 Verdicts: `VERIFIED`, `NO_ATTESTATION`, `UNTRUSTED_ISSUER`, `SUBJECT_MISMATCH`,
-`OPERATOR_DOMAIN_MISMATCH`, `DIGEST_MISMATCH`, `EXPIRED`, `REVOKED`.
+`OPERATOR_DOMAIN_MISMATCH`, `DIGEST_MISMATCH`, `EXPIRED`, `REVOKED`, `NO_STATUS` (no status pointer: a credential that cannot be revoked is not relied on).
 
 The lookalike fails at **step 5**, having passed 1–4. That is the demo's central point: signature,
 issuer trust, domain anchoring and digests all hold. Only the subject binding separates them.
@@ -112,11 +112,13 @@ is wrong.
 2. **No verdict may depend on registry-held data.** Every input is re-fetched from the publisher.
    This is what makes the registry replaceable — and why running without one costs nothing.
 3. **Relevance is never trust.** Wherever a score is shown, the ARD wording travels with it.
-4. **The relying party checks revocation.** Heka's verifier does not. Any new protocol path must
-   check the status list itself, or its kill switch is decorative.
+4. **The relying party checks revocation — of the credential that was presented.** Heka's verifier
+   does not consult the status list and does not constrain the issuer. Any new protocol path must
+   evaluate the presented credential itself (`src/shared/presented-credential.ts`), or its kill
+   switch is decorative.
 5. **Fail closed.** Unreadable status list, unresolvable DID, unreachable card → refuse. A refusal
    is a trust decision and gets an audit entry.
-6. **Refusals are auditable.** Engaging a non-VERIFIED resource is refused *and recorded*, not
+6. **Refusals are auditable.** Engaging a non-VERIFIED resource is refused _and recorded_, not
    silently dropped.
 7. **Simulation is labelled.** The in-process holder is an affordance for development; who
    presented a credential is exactly what the demo is about, so it says so in the UI and the audit.
@@ -141,8 +143,10 @@ docs/           this documentation
 ## Where decisions are written down
 
 - [ADR-001](../spec/ADR-001-field-decisions.md) — pinned ARD version, field names, why the VC
-  attestation profile is a *proposal*, why revocation is app-layer
+  attestation profile is a _proposal_, why revocation is app-layer
 - [ADR-002](../spec/ADR-002-registry-integration.md) — registry integration, what blocks it, and
   the fallback the demo ships on
+- [REVOCATION-AUDIT](REVOCATION-AUDIT.md) — what the revocation audit found, what was fixed, what
+  was accepted
 - Commit messages carry the reasoning for individual changes; `git log` on this directory is a
   usable narrative.

@@ -6,10 +6,11 @@
  * pauses in `auth-required` carrying an OID4VP request. It resumes only once the operator has
  * presented a Finance Data Officer credential — disclosing role and organisation, nothing else.
  *
- * One addition over the reference demo, and it is the point of Part IV: Heka's verifier
- * confirms the presentation is cryptographically sound but does **not** consult the issuer's
- * status list. So after a valid presentation this agent checks revocation itself. Without that,
- * revoking the officer credential would not actually deny anything.
+ * One addition over the reference demo, and it is the point of Part IV: Heka's verifier confirms
+ * the presentation is cryptographically sound but does **not** consult the issuer's status list,
+ * nor constrain the issuer. So after a valid presentation this agent evaluates the presented
+ * credential itself (src/shared/presented-credential.ts). Without that, revoking the officer
+ * credential would not actually deny anything.
  */
 
 import express from 'express'
@@ -28,11 +29,18 @@ import { A2AExpressApp } from '@a2a-js/sdk/server/express'
 import * as dotenv from 'dotenv'
 import { WebSocket } from 'ws'
 
-import { checkCredentialStatus } from '../core/status-list'
 import { ROLE_CREDENTIAL_VCT } from '../core/types'
 import { loadState } from '../seed/state'
 import { OFFICER_CREDENTIAL } from '../shared/demo-config'
 import { identityServiceFromEnv, IdentityServiceClient } from '../shared/identity-service'
+import {
+  assertPresentedCredentialValid,
+  PresentationRefused,
+  PresentedCredential,
+  readPresentedCredential,
+  StatusCheck,
+  statusListOriginOf,
+} from '../shared/presented-credential'
 import {
   IN_TASK_OID4VP_EXTENSION_URI,
   InTaskOpenId4VpAuthorizationRequest,
@@ -66,7 +74,7 @@ const OFFICER_PRESENTATION_DEFINITION = {
         limit_disclosure: 'required',
         fields: [
           { path: ['$.vct'], filter: { type: 'string', enum: [ROLE_CREDENTIAL_VCT] } },
-          { path: ['$.role'], filter: { type: 'string' } },
+          { path: ['$.role'], filter: { type: 'string', enum: [OFFICER_CREDENTIAL.role] } },
           { path: ['$.org'], filter: { type: 'string' } },
         ],
       },
@@ -266,16 +274,54 @@ class InvoiceAgentExecutor implements AgentExecutor {
     }
   }
 
-  private async awaitAuthorization(sessionId: string, contextId: string): Promise<void> {
+  private async awaitAuthorization(
+    sessionId: string,
+    contextId: string
+  ): Promise<{ presented: PresentedCredential; status: StatusCheck }> {
     await this.waitForVerifiedPresentation(sessionId)
 
-    // The presentation is cryptographically valid. That is not the same as currently
-    // authorized: Heka's verifier does not consult the issuer's status list, so a revoked
-    // credential would still verify. Check revocation before letting the task proceed.
-    await this.assertCredentialNotRevoked()
+    // Heka verified the signature and the key binding. Whether this relying party accepts the
+    // credential — its issuer, its type, and whether it is still live — is decided here, against
+    // the presented token itself. Never against a seed slot: the slot says what was issued, the
+    // token says what was shown.
+    const trustedIssuer = loadState().issuerDid
+    if (!trustedIssuer) throw new AuthorizationDenied('no trusted issuer configured — run `yarn seed`')
 
-    this.authorizedContexts.add(contextId)
-    console.log(`[agent] context ${contextId.slice(0, 8)} authorized`)
+    // Declared outside the try so a refusal can still log which status pointer it was judged on.
+    let presented: PresentedCredential | undefined
+    try {
+      presented = readPresentedCredential(await this.identityService.getVerificationSession(sessionId))
+      const status = await assertPresentedCredentialValid(
+        presented,
+        {
+          trustedIssuers: [trustedIssuer],
+          requiredVct: ROLE_CREDENTIAL_VCT,
+          statusListOrigin: this.identityService.baseOrigin,
+          credentialLabel: OFFICER_CREDENTIAL.role,
+          requiredClaims: { role: OFFICER_CREDENTIAL.role },
+        },
+        fetch
+      )
+      console.log(`[agent] status checked: index ${status.statusListIndex} on ${status.statusListCredential} -> live`)
+
+      this.authorizedContexts.add(contextId)
+      console.log(`[agent] context ${contextId.slice(0, 8)} authorized`)
+      return { presented, status }
+    } catch (error) {
+      if (error instanceof PresentationRefused) {
+        if (error.reason === 'revoked' && presented?.credentialStatus) {
+          const { statusListIndex, statusListCredential } = presented.credentialStatus
+          console.log(`[agent] status checked: index ${statusListIndex} on ${statusListCredential} -> revoked`)
+        }
+        if (error.reason === 'foreign-status-list' && presented?.credentialStatus) {
+          const origin = statusListOriginOf(presented.credentialStatus) ?? '(not a URL)'
+          console.log(`[agent] status list origin ${origin} is not ${this.identityService.baseOrigin}`)
+        }
+        console.log(`[agent] presentation refused (${error.reason}): ${error.message}`)
+        throw new AuthorizationDenied(error.message)
+      }
+      throw error
+    }
   }
 
   private waitForVerifiedPresentation(sessionId: string): Promise<void> {
@@ -310,26 +356,6 @@ class InvoiceAgentExecutor implements AgentExecutor {
         }
       }, 500)
     })
-  }
-
-  private async assertCredentialNotRevoked(): Promise<void> {
-    const state = loadState()
-    const statusListId = state.statusListId
-    const index = state.statusIndexes.officer
-
-    if (!statusListId || index === undefined) {
-      console.log('[agent] no status pointer in seed state; skipping the revocation check')
-      return
-    }
-
-    const revoked = await checkCredentialStatus(
-      { statusListCredential: this.identityService.statusListUrl(statusListId), statusListIndex: index },
-      fetch
-    )
-
-    if (revoked) {
-      throw new AuthorizationDenied(`the ${OFFICER_CREDENTIAL.role} credential has been revoked by its issuer`)
-    }
   }
 }
 

@@ -10,7 +10,7 @@
  *   5. subject binding: credential.resource_did == trustManifest.identity
  *      operator domain: operator.domain == URN publisher FQDN == serving domain
  *      card binding: resource_card_digest == digest of the served card
- *   6. status list: is this credential revoked right now
+ *   6. status list: is this credential revoked right now — and does it have a status pointer at all
  *
  * Two properties this deliberately has:
  *
@@ -188,19 +188,23 @@ export async function verifyEntry(
 
   // 6. Revocation is live state, so it is checked last and never cached.
   const status = claims.credentialStatus as CredentialStatusClaim | undefined
-  if (status) {
-    try {
-      evidence.statusRevoked = await checkCredentialStatus(status, fetchFn)
-      evidence.statusListChecked = true
-    } catch (error) {
-      // Fail closed: an unreadable status list means we cannot claim the credential is live.
-      evidence.statusListChecked = false
-      return decided(Verdict.Revoked, evidence, `status list unavailable, refusing to assume valid: ${message(error)}`)
-    }
+  evidence.statusPointerPresent = Boolean(status)
+  if (!status) {
+    // A credential nobody can revoke is not one this relying party will rely on.
+    return decided(Verdict.NoStatus, evidence, 'passport carries no status pointer and can never be revoked')
+  }
 
-    if (evidence.statusRevoked) {
-      return decided(Verdict.Revoked, evidence, 'credential is revoked by its issuer')
-    }
+  try {
+    evidence.statusRevoked = await checkCredentialStatus(status, fetchFn)
+    evidence.statusListChecked = true
+  } catch (error) {
+    // Fail closed: an unreadable status list means we cannot claim the credential is live.
+    evidence.statusListChecked = false
+    return decided(Verdict.Revoked, evidence, `status list unavailable, refusing to assume valid: ${message(error)}`)
+  }
+
+  if (evidence.statusRevoked) {
+    return decided(Verdict.Revoked, evidence, 'credential is revoked by its issuer')
   }
 
   return decided(Verdict.Verified, evidence)

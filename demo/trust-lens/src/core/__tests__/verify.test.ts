@@ -36,6 +36,7 @@ const passportClaims = (overrides: Record<string, unknown> = {}) => ({
   resource_card_url: `https://${ACME_DOMAIN}/.well-known/agent-card.json`,
   resource_card_digest: sha256Digest(CARD),
   operator: { legal_name: 'Acme Corp GmbH', domain: ACME_DOMAIN },
+  credentialStatus: { statusListCredential: STATUS_LIST_URL, statusListIndex: 3 },
   ...overrides,
 })
 
@@ -102,6 +103,9 @@ describe('verifyEntry', () => {
       cardDigestValid: true,
       operatorLegalName: 'Acme Corp GmbH',
       subjectDid: ACME_AGENT_DID,
+      statusPointerPresent: true,
+      statusListChecked: true,
+      statusRevoked: false,
     })
   })
 
@@ -246,6 +250,25 @@ describe('verifyEntry', () => {
 
     expect(result.verdict).toBe(Verdict.Revoked)
     expect(result.evidence.statusListChecked).toBe(false)
+  })
+
+  it('returns NO_STATUS when the passport carries no status pointer (it could never be revoked)', async () => {
+    const result = await verifyEntry(
+      entry(),
+      acme,
+      options({
+        verifySdJwt: async () => ({
+          valid: true,
+          issuer: TRUSTCO,
+          payload: passportClaims({ credentialStatus: undefined }) as never,
+        }),
+      })
+    )
+
+    expect(result.verdict).toBe(Verdict.NoStatus)
+    expect(result.evidence.statusPointerPresent).toBe(false)
+    expect(result.evidence.statusListChecked).toBeUndefined()
+    expect(result.evidence.failureDetail).toMatch(/no status pointer/)
   })
 
   it('refuses an entry whose identity cannot be resolved', async () => {

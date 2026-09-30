@@ -45,17 +45,19 @@ by side.
 
 ```bash
 curl -s -X POST http://localhost:4000/api/engage -H "content-type: application/json" \
-  -d '{"identifier":"urn:air:acme-invoices-ai.example:finance:invoice-agent","verdict":"SUBJECT_MISMATCH"}'
+  -d '{"identifier":"urn:air:acme-invoices-ai.example:finance:invoice-agent"}'
 ```
 
-Expect `403 refused: not verified` **and** an `auditId`. The refusal is a trust decision and is
-recorded; it is not silently dropped.
+Expect `403 refused: not verified` **and** an `auditId`. The body needs only `identifier` — any
+`verdict` a client sends is ignored, because the Trust Lens re-verifies the resource before
+engaging and answers with its own verdict (`SUBJECT_MISMATCH` here). The refusal is a trust
+decision and is recorded; it is not silently dropped.
 
 ## 4. A2A — the agent pauses for a human
 
 ```bash
 curl -s -X POST http://localhost:4000/api/engage -H "content-type: application/json" \
-  -d '{"identifier":"urn:air:acme-invoices.example:finance:invoice-agent","verdict":"VERIFIED"}'
+  -d '{"identifier":"urn:air:acme-invoices.example:finance:invoice-agent"}'
 ```
 
 Poll `GET /api/task/<id>`. Expect `working` → `working` → **`auth-required`**, with
@@ -125,7 +127,7 @@ curl -s -X POST http://localhost:4100/api/credentials/officer/status \
   live token. Drop the cached token first, then the call fails and the AS refuses:
 
   ```bash
-  docker restart trustlens-web        # the only way today — forgetToken() is not exposed
+  curl -s -X DELETE http://localhost:4000/api/mcp/token   # or the Drop token button on the MCP tab
   ```
 
   Then: sensitive call → `401`, present → `GET /api/mcp/authorization` returns

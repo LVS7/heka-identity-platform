@@ -48,6 +48,11 @@ describe('readStatusBit', () => {
     expect(() => readStatusBit(Buffer.alloc(1), 8)).toThrow(/exceeds bitstring length/)
     expect(() => readStatusBit(Buffer.alloc(1), -1)).toThrow(/out of range/)
   })
+
+  it('rejects a non-integer index instead of reading a neighbouring bit', () => {
+    expect(() => readStatusBit(Buffer.alloc(1), Number.NaN)).toThrow(/out of range/)
+    expect(() => readStatusBit(Buffer.alloc(1), 1.5)).toThrow(/out of range/)
+  })
 })
 
 describe('isRevokedInStatusList', () => {
@@ -79,11 +84,46 @@ describe('checkCredentialStatus', () => {
     }) as unknown as typeof fetch
 
     await expect(checkCredentialStatus(status, fetchFn)).resolves.toBe(true)
-    expect(fetchFn).toHaveBeenCalledWith(status.statusListCredential)
+    expect(fetchFn).toHaveBeenCalledWith(
+      status.statusListCredential,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
   })
 
   it('fails loudly when the status list cannot be fetched (fail closed)', async () => {
     const fetchFn = vi.fn().mockResolvedValue({ ok: false, status: 503 }) as unknown as typeof fetch
     await expect(checkCredentialStatus(status, fetchFn)).rejects.toThrow(/HTTP 503/)
+  })
+
+  it('rejects a malformed index before fetching anything (a bad pointer is not "not revoked")', async () => {
+    const fetchFn = vi.fn() as unknown as typeof fetch
+
+    await expect(checkCredentialStatus({ ...status, statusListIndex: Number.NaN }, fetchFn)).rejects.toThrow(
+      /non-negative integer/
+    )
+    await expect(checkCredentialStatus({ ...status, statusListIndex: 1.5 }, fetchFn)).rejects.toThrow(
+      /non-negative integer/
+    )
+    await expect(
+      checkCredentialStatus({ ...status, statusListIndex: undefined as unknown as number }, fetchFn)
+    ).rejects.toThrow(/non-negative integer/)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('rejects a status pointer that is not an http(s) URL', async () => {
+    const fetchFn = vi.fn() as unknown as typeof fetch
+    await expect(
+      checkCredentialStatus({ ...status, statusListCredential: 'file:///etc/passwd' }, fetchFn)
+    ).rejects.toThrow(/http\(s\) URL/)
+    expect(fetchFn).not.toHaveBeenCalled()
+  })
+
+  it('gives up on a status list that never answers (fail closed on timeout)', async () => {
+    const fetchFn = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)))
+    ) as unknown as typeof fetch
+
+    await expect(checkCredentialStatus(status, fetchFn, { timeoutMs: 50 })).rejects.toThrow(/status list unavailable/)
   })
 })

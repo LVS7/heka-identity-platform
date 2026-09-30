@@ -12,6 +12,7 @@
     "seed": "tsx src/seed.ts",
     "derisk": "tsx src/scripts/derisk-revocation.ts",
     "derisk:holder": "tsx src/scripts/derisk-holder.ts",
+    "capture:presentation": "tsx src/scripts/capture-presentation.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",

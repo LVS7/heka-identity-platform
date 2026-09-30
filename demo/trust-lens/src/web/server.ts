@@ -99,8 +99,29 @@ function main() {
     initialDid: process.env.HOLDER_PUBLIC_DID,
     transport: () => credoWalletTransport({ label: 'trust-lens-wallet-link', inboundPort: DIDCOMM_PORT }),
   })
-  let agent: VerifierAgent | undefined
+  let verifierReady: Promise<VerifierAgent> | undefined
   let pendingAuthorization: PendingAuthorization | undefined
+
+  /**
+   * The verifier agent is brought up on first use; a stand that never verifies pays nothing for it.
+   * The promise, not the agent, is memoized: a request arriving while the first is still
+   * initialising would otherwise find the agent set and verify with one that is not ready yet.
+   * A failed start is forgotten so the next request retries instead of failing forever.
+   */
+  const verifierOptions = async () => {
+    if (!verifierReady) {
+      const agent = createVerifierAgent()
+      verifierReady = agent.initialize().then(
+        () => agent,
+        (error: unknown) => {
+          verifierReady = undefined
+          throw error
+        }
+      )
+    }
+    const agent = await verifierReady
+    return { trustedIssuers: [state.issuerDid as string], ...verifierDependencies(agent) }
+  }
 
   const app = express()
   app.use(express.json())
@@ -167,12 +188,7 @@ function main() {
         ? discovered.filter((item) => identifiers.includes(item.entry.identifier))
         : discovered
 
-      if (!agent) {
-        agent = createVerifierAgent()
-        await agent.initialize()
-      }
-
-      const options = { trustedIssuers: [state.issuerDid as string], ...verifierDependencies(agent) }
+      const options = await verifierOptions()
 
       const results = []
       for (const { entry, servingDomain } of targets) {
@@ -196,26 +212,49 @@ function main() {
     }
   })
 
-  /** Fail closed: engaging a resource that is not VERIFIED is refused, and the refusal is logged. */
+  /**
+   * Engage a resource. Fail closed: the resource is re-verified here and now, and whatever verdict
+   * the browser holds is not consulted — a stale or forged VERIFIED must not start a task. The
+   * cost is one more Hedera resolution per Engage; the alternative is a gate that trusts the caller.
+   */
   app.post('/api/engage', async (req, res) => {
     const identifier = String(req.body?.identifier ?? '')
-    const verdict = String(req.body?.verdict ?? '')
-
-    if (verdict !== Verdict.Verified) {
-      const event = audit.record('engagement_refused', identifier, verdict, { reason: 'resource is not VERIFIED' })
-      res.status(403).json({ error: 'refused: not verified', auditId: event.id })
-      return
-    }
 
     try {
-      // Audit entries read better with the name the operator saw than with the URN.
-      const discovered = await discover('')
-      const displayName = discovered.find((item) => item.entry.identifier === identifier)?.entry.displayName
+      const target = (await discover('')).find((item) => item.entry.identifier === identifier)
+      if (!target) {
+        res.status(404).json({ error: 'unknown resource' })
+        return
+      }
 
-      const task = await tasks.start(displayName ?? identifier, String(req.body?.prompt ?? DEFAULT_TASK_PROMPT))
-      res.json({ ok: true, taskId: task.id })
+      const result = await verifyEntry(target.entry, { servingDomain: target.servingDomain }, await verifierOptions())
+      const verification = audit.record('verification', target.entry.displayName, result.verdict, result.evidence)
+
+      if (result.verdict !== Verdict.Verified) {
+        const refusal = audit.record('engagement_refused', identifier, result.verdict, {
+          reason: 'resource is not VERIFIED at engagement time',
+          verdict: result.verdict,
+          verificationAuditId: verification.id,
+        })
+        res.status(403).json({ error: 'refused: not verified', verdict: result.verdict, auditId: refusal.id })
+        return
+      }
+
+      const preflight = { verdict: result.verdict, auditId: verification.id, verifiedAt: result.verifiedAt }
+      if (!target.entry.type.includes('a2a')) {
+        // An MCP server is engaged by calling its tools; the verdict is what the tab shows.
+        res.json({ ok: true, kind: 'mcp', ...preflight })
+        return
+      }
+
+      const task = await tasks.start(
+        target.entry.displayName,
+        String(req.body?.prompt ?? DEFAULT_TASK_PROMPT),
+        preflight
+      )
+      res.json({ ok: true, kind: 'agent', taskId: task.id, ...preflight })
     } catch (error) {
-      res.status(502).json({ error: `could not reach the agent: ${(error as Error).message}` })
+      res.status(502).json({ error: `could not engage: ${(error as Error).message}` })
     }
   })
 
@@ -381,6 +420,21 @@ function main() {
       pendingAuthorization = undefined
       res.status(403).json({ error: message })
     }
+  })
+
+  /**
+   * Drop the cached access token. Revoking a credential stops the *next* grant — a token already
+   * minted stays valid until it expires, exactly as OAuth intends — so showing the kill switch
+   * means getting rid of the token first. This used to require restarting the process.
+   */
+  app.delete('/api/mcp/token', (_req, res) => {
+    const before = mcp.tokenStatus
+    mcp.forgetToken()
+    audit.record('authorization', 'MCP · token', 'cached access token dropped by the operator', {
+      hadToken: before.present,
+      expiresInSeconds: before.expiresInSeconds,
+    })
+    res.json({ token: mcp.tokenStatus })
   })
 
   app.get('/api/audit', (req, res) => {

@@ -32,8 +32,9 @@ rather than working around it.
 1. **Verification runs in the orchestrator, never in the registry.**
 2. **No verdict may depend on registry-held data** — re-fetch from the publisher.
 3. **Relevance is never trust.** Keep the ARD §7.2 wording next to any score.
-4. **The relying party checks revocation itself.** Heka's verifier does not. A new protocol path
-   without its own status check has a decorative kill switch.
+4. **The relying party checks revocation itself — of the credential that was presented.** Heka's
+   verifier does not, and does not constrain the issuer. A new protocol path without its own check
+   has a decorative kill switch.
 5. **Fail closed** — unreadable status list, unresolvable DID, unreachable card all mean refuse.
 6. **Refusals are audited**, not silently dropped.
 7. **Simulation is labelled.** Who presented a credential is the subject of the demo.

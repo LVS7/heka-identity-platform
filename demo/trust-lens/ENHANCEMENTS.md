@@ -11,13 +11,12 @@ in [docs/GOAL.md](docs/GOAL.md); this file is about _how to close_ what is open 
 | --- | ----------------------------------------------------------------------------------------------------------------- | ------------------------ |
 | 1   | [Non-repudiation](#non-repudiation)                                                                               | **yes**                  |
 | 2   | [Registry ingestion](#registry-ingestion)                                                                         | **yes**                  |
-| 3   | [A way to drop the access token](#a-way-to-drop-the-access-token)                                                 | no                       |
-| 4   | [Finish a pending authorization instead of orphaning it](#finish-a-pending-authorization-instead-of-orphaning-it) | no                       |
-| 5   | [Stage the five verdicts nobody can see](#stage-the-five-verdicts-nobody-can-see)                                 | no                       |
-| 6   | [Widen the presentation window](#widen-the-presentation-window)                                                   | no                       |
-| 7   | [Run typecheck and tests on every change](#run-typecheck-and-tests-on-every-change)                               | no                       |
-| 8   | [Show the wallet's public DID in the wallet](#show-the-wallets-public-did-in-the-wallet)                          | no                       |
-| 9   | [Drop the inbound DIDComm transport](#drop-the-inbound-didcomm-transport)                                         | no                       |
+| 3   | [Finish a pending authorization instead of orphaning it](#finish-a-pending-authorization-instead-of-orphaning-it) | no                       |
+| 4   | [Stage the six verdicts nobody can see](#stage-the-six-verdicts-nobody-can-see)                                   | no                       |
+| 5   | [Widen the presentation window](#widen-the-presentation-window)                                                   | no                       |
+| 6   | [Run typecheck and tests on every change](#run-typecheck-and-tests-on-every-change)                               | no                       |
+| 7   | [Show the wallet's public DID in the wallet](#show-the-wallets-public-did-in-the-wallet)                          | no                       |
+| 8   | [Drop the inbound DIDComm transport](#drop-the-inbound-didcomm-transport)                                         | no                       |
 
 ---
 
@@ -73,23 +72,6 @@ prove is that the trust layer composes with a directory somebody else wrote.
 
 ---
 
-## A way to drop the access token
-
-**Why.** The MCP kill switch is real but awkward to show. Revoking the officer credential stops
-the authorization server minting a _new_ token; a token already issued stays valid for the rest of
-its five minutes, exactly as OAuth intends. To demonstrate the denial you must first get rid of
-the cached token, and today the only way is `docker restart trustlens-web`.
-
-`McpClient.forgetToken()` already exists in `src/web/mcp-client.ts` — it is simply never called
-from anywhere and not exposed.
-
-**What it takes.** A `DELETE /api/mcp/token` route and a button beside the TTL countdown.
-
-**What it buys.** The most persuasive step in the demo stops requiring a container restart in
-front of an audience.
-
----
-
 ## Finish a pending authorization instead of orphaning it
 
 **Why.** Calling a scoped tool while an authorization is already pending starts a second one and
@@ -105,11 +87,11 @@ mattering.
 
 ---
 
-## Stage the five verdicts nobody can see
+## Stage the six verdicts nobody can see
 
-**Why.** The engine distinguishes eight verdicts and all eight are unit-tested, but only three —
+**Why.** The engine distinguishes nine verdicts and all nine are unit-tested, but only three —
 `VERIFIED`, `SUBJECT_MISMATCH`, `REVOKED` — can be produced on a running stand. `UNTRUSTED_ISSUER`,
-`EXPIRED`, `DIGEST_MISMATCH`, `OPERATOR_DOMAIN_MISMATCH` and `NO_ATTESTATION` exist only in tests.
+`EXPIRED`, `DIGEST_MISMATCH`, `OPERATOR_DOMAIN_MISMATCH`, `NO_ATTESTATION` and `NO_STATUS` exist only in tests.
 
 That matters more than it sounds. The lookalike in the scenario is caught by subject binding, but
 a different attacker — one who gets a genuine passport for their own DID from an issuer nobody

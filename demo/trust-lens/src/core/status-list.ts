@@ -41,7 +41,8 @@ export function decodeEncodedList(encodedList: string): Buffer {
 
 /** Read a single status bit. Bits are indexed most-significant-first within each byte. */
 export function readStatusBit(bitstring: Buffer, index: number): boolean {
-  if (index < 0) throw new Error(`statusListIndex out of range: ${index}`)
+  // A NaN or fractional index would silently read byte 0 — "not revoked" by accident.
+  if (!Number.isInteger(index) || index < 0) throw new Error(`statusListIndex out of range: ${index}`)
 
   const byteIndex = Math.floor(index / 8)
   if (byteIndex >= bitstring.length) {
@@ -58,15 +59,45 @@ export function isRevokedInStatusList(statusList: BitstringStatusListCredential,
   return readStatusBit(bitstring, index)
 }
 
+export interface StatusCheckOptions {
+  /** How long to wait for the status list before refusing. A hanging list is not a live list. */
+  timeoutMs?: number
+}
+
+const DEFAULT_STATUS_TIMEOUT_MS = 10_000
+
+/** The claim is signed by the issuer, but a malformed one must still refuse rather than pass. */
+function assertStatusClaim(status: CredentialStatusClaim): void {
+  if (typeof status?.statusListCredential !== 'string' || !/^https?:\/\//.test(status.statusListCredential)) {
+    throw new Error('credentialStatus.statusListCredential must be an http(s) URL')
+  }
+  if (!Number.isInteger(status.statusListIndex) || status.statusListIndex < 0) {
+    throw new Error(
+      `credentialStatus.statusListIndex must be a non-negative integer, got ${String(status.statusListIndex)}`
+    )
+  }
+}
+
 /**
  * Fetch the status list credential referenced by a credential's `credentialStatus` claim
- * and report whether that credential is revoked.
+ * and report whether that credential is revoked. Every failure throws: the caller decides
+ * trust, and "could not check" is never "not revoked".
  */
 export async function checkCredentialStatus(
   status: CredentialStatusClaim,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  options: StatusCheckOptions = {}
 ): Promise<boolean> {
-  const response = await fetchFn(status.statusListCredential)
+  assertStatusClaim(status)
+
+  let response: Response
+  try {
+    response = await fetchFn(status.statusListCredential, {
+      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS),
+    })
+  } catch (error) {
+    throw new Error(`status list unavailable: ${(error as Error).message} for ${status.statusListCredential}`)
+  }
   if (!response.ok) {
     throw new Error(`status list fetch failed: HTTP ${response.status} for ${status.statusListCredential}`)
   }

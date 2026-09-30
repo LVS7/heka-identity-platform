@@ -85,6 +85,7 @@ export enum Verdict {
   DigestMismatch = 'DIGEST_MISMATCH',
   Expired = 'EXPIRED',
   Revoked = 'REVOKED',
+  NoStatus = 'NO_STATUS',
 }
 
 /** Evidence gathered while verifying a single candidate; attached to the verdict and the audit log. */
@@ -104,6 +105,7 @@ export interface VerificationEvidence {
   operatorDomain?: string
   operatorLegalName?: string
   cardDigestValid?: boolean
+  statusPointerPresent?: boolean
   statusListChecked?: boolean
   statusRevoked?: boolean
   failureDetail?: string
@@ -117,7 +119,8 @@ export interface VerificationResult {
 
 // ---------- Audit ----------
 
-export type AuditEventType = 'verification' | 'authorization' | 'denial' | 'revocation' | 'engagement_refused'
+export type AuditEventType =
+  'verification' | 'authorization' | 'denial' | 'revocation' | 'issuance' | 'engagement_refused'
 
 export interface AuditEvent {
   id: string

@@ -37,7 +37,7 @@ serves the following goals:
 - **Pending state is fragile.** No Tasks tab — any tab click clears `taskPoll` and `authPoll`
   (`app.js:608-612`) and the task view cannot be reopened; a 409 from `/api/mcp/authorization`
   keeps polling silently; a second Invoke while an authorization is pending orphans the first
-  (ENHANCEMENTS §4).
+  (ENHANCEMENTS §3).
 - **Simulation labelling is uneven (invariant 7).** A2A audits the simulated presentation
   (`tasks.ts:142-144`); `POST /api/mcp/simulate-presentation` audits nothing
   (`src/web/server.ts:342-354`); both results look identical to a real one.
@@ -87,35 +87,42 @@ serves the following goals:
 
 ```ts
 /** Spec (v1): carried on `auth-required`. */
-export interface InTaskOpenId4VpAuthorizationRequest { client_id: string; request_uri: string }
+export interface InTaskOpenId4VpAuthorizationRequest {
+  client_id: string
+  request_uri: string
+}
 
 /**
  * Demo additions. The v1 spec defines nothing after the request; these fields let the client show
  * what is asked, how far the exchange has got, and what was verified. Same key, clearly labelled.
  */
-export interface InTaskOpenId4VpRequested { purpose: string; credentialType: string; claims: string[] }
+export interface InTaskOpenId4VpRequested {
+  purpose: string
+  credentialType: string
+  claims: string[]
+}
 export interface InTaskOpenId4VpAuthorizationStatus {
   sessionId: string
   state: 'RequestCreated' | 'RequestUriRetrieved' | 'ResponseVerified' | string
-  expiresAt: string                        // agent start + AGENT_AUTH_TIMEOUT_MS
+  expiresAt: string // agent start + AGENT_AUTH_TIMEOUT_MS
   requested: InTaskOpenId4VpRequested
 }
 export interface InTaskOpenId4VpAuthorizationResult {
   sessionId: string
   outcome: 'authorized' | 'denied'
-  reason?: string                          // denial message (see T1 table)
+  reason?: string // denial message (see T1 table)
   claims?: Record<string, unknown>
   issuer?: string
   holder?: string
   credentialType?: string
-  status?: StatusCheck                     // from src/shared/presented-credential
+  status?: StatusCheck // from src/shared/presented-credential
   vpToken?: string
   verifiedAt?: string
 }
 export interface InTaskOpenId4VpMessageMetadata {
-  authorizationRequest?: InTaskOpenId4VpAuthorizationRequest   // auth-required (spec)
-  authorizationStatus?: InTaskOpenId4VpAuthorizationStatus     // auth-required, working (demo)
-  authorizationResult?: InTaskOpenId4VpAuthorizationResult     // completed, failed (demo)
+  authorizationRequest?: InTaskOpenId4VpAuthorizationRequest // auth-required (spec)
+  authorizationStatus?: InTaskOpenId4VpAuthorizationStatus // auth-required, working (demo)
+  authorizationResult?: InTaskOpenId4VpAuthorizationResult // completed, failed (demo)
 }
 ```
 
@@ -157,7 +164,7 @@ presentation (demo addition)".
 // src/web/presentation.ts — shared by both paths
 export type PresentationSource = 'wallet' | 'qr' | 'simulated' | 'unknown'
 export interface AuthorizationView {
-  request: string                          // openid4vp:// URI — the QR payload
+  request: string // openid4vp:// URI — the QR payload
   clientId?: string
   sessionId?: string
   state: 'requested' | 'wallet-fetched' | 'verified' | 'authorized' | 'denied' | 'expired'
@@ -166,9 +173,14 @@ export interface AuthorizationView {
   delivery?: DeliveryState
   source?: PresentationSource
 }
-export interface PresentationView extends InTaskOpenId4VpAuthorizationResult { source: PresentationSource }
+export interface PresentationView extends InTaskOpenId4VpAuthorizationResult {
+  source: PresentationSource
+}
 export function toAuthorizationState(sessionState: string): AuthorizationView['state']
-export function presentationFrom(result: InTaskOpenId4VpAuthorizationResult, source?: PresentationSource): PresentationView
+export function presentationFrom(
+  result: InTaskOpenId4VpAuthorizationResult,
+  source?: PresentationSource
+): PresentationView
 ```
 
 - `TrackedTask` becomes `{ id, resource, state, startedAt, events, a2a?: { taskId, contextId }, preflight? (T1), authorization?: AuthorizationView, presentation?: PresentationView, result?, error? }`;
@@ -182,7 +194,7 @@ export function presentationFrom(result: InTaskOpenId4VpAuthorizationResult, sou
   `completeAuthorization` returns `{ granted: boolean; session?: { id, state }; presentation?: PresentationView }`
   and throws `AuthorizationDeniedError { presentation? }` on 403. Starting a step-up while one is
   pending **for the same scope and resource** returns the existing pending entry (closes
-  ENHANCEMENTS §4).
+  ENHANCEMENTS §3).
 - Routes: `GET /api/tasks` → `{ tasks: [{ id, resource, state, startedAt, a2a, presentation?: { outcome, claims } }] }`;
   `POST /api/mcp/call` adds `session`, `requested` to `authorization`;
   `POST /api/mcp/simulate-presentation` sets the source **and records**
@@ -226,7 +238,7 @@ README Flow 2 (steps 5–7 and the diagram gain "status-update working: wallet f
 presentation), `docs/ARCHITECTURE.md` (Authorization paths), `docs/GOAL.md` non-repudiation row
 ("the presentation is retained with the decision; still unsigned and in memory"),
 `.claude/skills/demo-walkthrough/SKILL.md` §4–5 expected JSON (`authorization`, `presentation`),
-`ENHANCEMENTS.md` §1 (VP retained; signing and persistence remain) and §4 removed.
+`ENHANCEMENTS.md` §1 (VP retained; signing and persistence remain) and §3 removed.
 
 ## Definition of Done
 
@@ -244,7 +256,7 @@ presentation), `docs/ARCHITECTURE.md` (Authorization paths), `docs/GOAL.md` non-
       keeps it live; 409 closes the panel.
 - [ ] The presentation card appears on both paths, with the source badge, and Raw VP opens.
 - [ ] The A2A countdown and the token TTL countdown move every second.
-- [ ] Global DoD (README); ENHANCEMENTS §4 removed.
+- [ ] Global DoD (README); ENHANCEMENTS §3 removed.
 
 ## Steps to validate
 
@@ -260,9 +272,9 @@ Stack per `run-demo` on this branch (it already contains T1 and T2). Curls from 
    curl -s http://localhost:4000/api/task/<id> | jq '{state, a2a, authorization: .authorization | {state, expiresAt, requested, sessionId}}'
    ```
 
-   Expect `state: "auth-required"`, `a2a.taskId` and `a2a.contextId` set, `authorization.state:
-   "requested"`, `requested.claims: ["role","org"]`, `requested.credentialType:
-   "urn:heka:role-credential:v1"`, an `expiresAt` about 180 s ahead.
+   Expect `state: "auth-required"`, `a2a.taskId` and `a2a.contextId` set,
+   `authorization.state: "requested"`, `requested.claims: ["role","org"]`,
+   `requested.credentialType: "urn:heka:role-credential:v1"`, an `expiresAt` about 180 s ahead.
 
 2. **Simulated, labelled, retained**
 
@@ -276,8 +288,8 @@ Stack per `run-demo` on this branch (it already contains T1 and T2). Curls from 
    `source: "simulated"`, `vpToken` starting with `ey`. The events include
    `Presentation verified; checking the credential's status.`
    `curl -s http://localhost:4000/api/audit | jq '.events[0:4]'` shows
-   `task completed after verified presentation` with `evidence.presentation.source ==
-   "simulated"` and `presentation submitted (simulated holder)`.
+   `task completed after verified presentation` with
+   `evidence.presentation.source == "simulated"` and `presentation submitted (simulated holder)`.
 
 3. **UI, A2A** — Tasks tab lists the task with `Authorized by Finance Data Officer · TrustCo …`;
    open it: the timeline, then the presentation card with all rows and the amber
@@ -291,8 +303,9 @@ Stack per `run-demo` on this branch (it already contains T1 and T2). Curls from 
    _Verified_ → _Status checked_ → _Authorized_; the card says `Presented via Heka Wallet (DIDComm)`.
 
 5. **Denied is a card too** — revoke the officer credential in the console, engage, simulate:
-   the task fails, the card renders red with `the Finance Data Officer credential has been
-   revoked by its issuer`, `status.revoked: true`; the Audit tab shows the `denial` with the
+   the task fails, the card renders red with
+   `the Finance Data Officer credential has been revoked by its issuer`, `status.revoked: true`;
+   the Audit tab shows the `denial` with the
    presentation evidence. Restore.
 
 6. **MCP mirrors it** — Invoke `suppliers-export-bank-details`:
@@ -312,12 +325,12 @@ Stack per `run-demo` on this branch (it already contains T1 and T2). Curls from 
 ## Docs to update
 
 `README.md` (Flow 2, Flow 3, "Open the demo" mentions the Tasks tab), `docs/ARCHITECTURE.md`,
-`docs/GOAL.md`, `.claude/skills/demo-walkthrough/SKILL.md`, `ENHANCEMENTS.md` (§1 edited, §4 removed).
+`docs/GOAL.md`, `.claude/skills/demo-walkthrough/SKILL.md`, `ENHANCEMENTS.md` (§1 edited, §3 removed).
 
 ## Risks and open questions
 
 - `expiresAt` is the agent's own timeout, not Heka's session lifetime (not exposed, ENHANCEMENTS
-  §6). The countdown must say "agent timeout"; a session can expire earlier on a slow tap.
+  §5). The countdown must say "agent timeout"; a session can expire earlier on a slow tap.
 - Retaining `vpToken` in the in-memory audit grows memory by ~2 KB per presentation. Fine for a
   demo; note it in `docs/GOAL.md`.
 - The `holder` for a phone-issued credential is whatever `cnf` Heka Wallet binds (`did:key` or a

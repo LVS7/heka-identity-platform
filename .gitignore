@@ -56,3 +56,5 @@ node_modules/
 # Yarn Berry (regenerated on install; keep .yarn/releases & .yarn/plugins tracked)
 **/.yarn/cache
 **/.yarn/install-state.gz
+
+.superpowers/

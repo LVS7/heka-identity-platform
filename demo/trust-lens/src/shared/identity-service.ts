@@ -42,6 +42,17 @@ export interface VerificationSessionResponse {
   authorizationRequestObject?: unknown
 }
 
+export interface VerificationSessionRecord {
+  id: string
+  state: string
+  sharedAttributes?: Record<string, unknown>
+  authorizationResponsePayload?: {
+    vp_token?: unknown
+    presentation_submission?: unknown
+    [key: string]: unknown
+  }
+}
+
 export class IdentityServiceClient {
   private readonly api: AxiosInstance
 
@@ -106,9 +117,19 @@ export class IdentityServiceClient {
     return data
   }
 
-  public async getVerificationSession(id: string) {
-    const { data } = await this.api.get(`/openid4vc/verification-session/${id}`)
-    return data as { id: string; state: string; sharedAttributes?: Record<string, unknown> }
+  /**
+   * The record Heka keeps for a verification session. After `ResponseVerified` it also carries the
+   * parsed authorization response — the `vp_token` is what a relying party evaluates, because
+   * `sharedAttributes` strips `iss` and `cnf` and this demo needs both.
+   */
+  public async getVerificationSession(id: string): Promise<VerificationSessionRecord> {
+    const { data } = await this.api.get<VerificationSessionRecord>(`/openid4vc/verification-session/${id}`)
+    return data
+  }
+
+  /** Origin of the Identity Service — the only place this issuer's status lists may live. */
+  public get baseOrigin(): string {
+    return new URL(this.baseUrl).origin
   }
 
   // ---------- Bitstring status lists (revocation, D7) ----------

@@ -311,38 +311,36 @@ let taskPoll = null
 
 async function engage(identifier) {
   const result = state.results.find((r) => r.identifier === identifier)
-  const verdict = state.verdicts.get(identifier)
+
+  // The server re-verifies before engaging; the verdict this page holds is display only.
+  const response = await fetch('/api/engage', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier }),
+  })
+  const data = await response.json()
+
+  if (!response.ok) {
+    alert(data.verdict ? `refused: ${data.verdict} at engagement time` : data.error)
+    return
+  }
+
+  const verifiedAt = new Date(data.verifiedAt).toLocaleTimeString()
 
   // An MCP server is not engaged with a task: its tools are on the MCP tab. Going there is the
-  // engagement, and the verdict travels along so the tab can say what was verified.
-  if (result && !isAgent(result)) {
-    if (verdict?.verdict !== 'VERIFIED') {
-      alert('refused: not verified')
-      return
-    }
+  // engagement, and the fresh verdict travels along so the tab can say what was verified.
+  if (data.kind === 'mcp') {
     el('mcp-engaged').hidden = false
     el('mcp-engaged').textContent =
-      `${result.displayName} — VERIFIED at discovery (${result.publisher}). Verified is not the same as unlocked: the sensitive tool below still demands a scope.`
+      `${result?.displayName ?? identifier} — re-verified ${verifiedAt} · VERIFIED (${result?.publisher ?? ''}). Verified is not the same as unlocked: the sensitive tool below still demands a scope.`
     showView('mcp')
     loadTools()
     return
   }
 
-  const response = await fetch('/api/engage', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier, verdict: verdict?.verdict }),
-  })
-  const data = await response.json()
-
-  if (!response.ok) {
-    alert(data.error)
-    return
-  }
-
   el('task-title').textContent = result?.displayName ?? identifier
   el('task-context').textContent =
-    `VERIFIED · ${result?.publisher ?? ''} — asking it to reconcile May invoices and prepare the payment export`
+    `Re-verified ${verifiedAt} · VERIFIED · ${result?.publisher ?? ''} — asking it to reconcile May invoices and prepare the payment export`
   el('task-events').innerHTML = ''
   el('task-result').hidden = true
   hideAuthPanel('task')
@@ -447,6 +445,7 @@ function renderTokenStatus(token) {
     badge.className = 'badge'
     badge.textContent = 'no token'
   }
+  el('token-drop').hidden = !token?.present
 }
 
 async function invokeTool(name) {
@@ -529,6 +528,15 @@ async function simulateMcpPresentation() {
   }
 }
 
+async function dropToken() {
+  const response = await fetch('/api/mcp/token', { method: 'DELETE' })
+  const data = await response.json()
+  renderTokenStatus(data.token)
+  el('mcp-result').hidden = false
+  el('mcp-result').textContent =
+    'Cached token dropped. The next sensitive call has to authorize again — against the credential as it stands now.'
+}
+
 // ---------- audit ----------
 
 async function loadAudit() {
@@ -600,6 +608,7 @@ el('task-back').addEventListener('click', () => {
 })
 
 el('mcp-simulate').addEventListener('click', simulateMcpPresentation)
+el('token-drop').addEventListener('click', dropToken)
 el('tools').addEventListener('click', (event) => {
   const button = event.target.closest('[data-tool]')
   if (button) invokeTool(button.dataset.tool)

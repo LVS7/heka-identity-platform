@@ -47,4 +47,13 @@ describe('AuditLog', () => {
     expect(log.size).toBe(2)
     expect(log.list().map((event) => event.outcome)).toEqual(['REVOKED', 'VERIFIED'])
   })
+
+  it('records issuer-side events: revocation and issuance', () => {
+    const log = new AuditLog()
+    log.record('revocation', 'Finance Data Officer', 'REVOKED', { statusListIndex: 3 })
+    log.record('issuance', 'Finance Data Officer', 'offer minted', { delivered: true })
+
+    expect(log.list({ type: 'issuance' })).toHaveLength(1)
+    expect(log.list().map((event) => event.type)).toEqual(['issuance', 'revocation'])
+  })
 })

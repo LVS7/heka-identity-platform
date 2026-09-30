@@ -76,7 +76,7 @@ sequenceDiagram
 3. **Attestation**: it fetches the Resource Passport at the attestation URI and binds it to the catalog by digest _before_ trusting anything it says.
 4. **Credential checks**: signature and validity window, then whether the issuer is one of the orchestrator's own trust anchors — a decision the registry has no part in.
 5. **Binding checks**: the passport's `resource_did` against the manifest identity, the operator domain against the publisher FQDN, and the pinned card digest against the card actually served.
-6. **Revocation**: the issuer's status list, checked last and never cached — it is the only input that can change between two identical requests.
+6. **Revocation**: the issuer's status list, checked last and never cached — it is the only input that can change between two identical requests. A passport with no status pointer at all is `NO_STATUS` — a credential that can never be revoked is not one the Trust Lens relies on.
 7. **Verdict**: `VERIFIED`, `VERIFIED`, `SUBJECT_MISMATCH`. The lookalike's credential is genuine, correctly signed by the real TrustCo and unexpired; it was simply issued for _Acme's_ agent. Signature, issuer, domain anchoring and digests all pass — only the subject binding catches it. Engagement is refused and the refusal is audited.
 
 ### Flow 2 — A2A engagement (OID4VP In-Task Authorization)
@@ -429,10 +429,10 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens) and **http://l
 
    Engaging the verified **MCP server** instead takes you to the MCP tools tab: an MCP server is engaged by calling its tools, not by starting a task.
 
-4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. Watch the token's TTL count down.
+4. Open **MCP tools**. Invoke `invoices-list` → rows, no authorization. Invoke `suppliers-export-bank-details` → the scope challenge appears with the same three ways to present. The original call is retried automatically and the result names who authorized it. The badge shows the token's remaining lifetime; **Drop token** discards it.
 5. In the Console, **revoke** the Finance Data Officer credential.
    - Engage the agent again → the presentation still submits, and the sensitive step is then denied.
-   - For the MCP path, drop the cached token first (restart the Trust Lens service) — a token already minted stays valid for its remaining five minutes, which is how OAuth is meant to behave — then the authorization server refuses to mint a new one.
+   - For the MCP path, press **Drop token** first — a token already minted stays valid for its remaining five minutes, which is how OAuth is meant to behave — then the authorization server refuses to mint a new one.
 
    Restore it, then revoke the **Acme Invoice Data** passport and re-verify → that entry turns `REVOKED` while the agent stays `VERIFIED`.
 

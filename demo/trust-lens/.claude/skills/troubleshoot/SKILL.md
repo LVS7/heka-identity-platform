@@ -122,6 +122,21 @@ If that is `200` but engagement still fails, the card is advertising `localhost`
 Expected — that is the container's own loopback. Heka's offers and requests point there, so any
 container that claims or presents a credential needs the socat bridge (`run-demo`).
 
+### Every presentation is refused as "outside the issuer's service"
+
+**The relying party and the seed disagree about Heka's address.** The agent and the
+authorization server compare the origin of the credential's `statusListCredential` with the
+origin of their own `IDENTITY_SERVICE_URL`. The pointer was written at seed time from the seed's
+`IDENTITY_SERVICE_URL`; a container given `host.docker.internal` or `127.0.0.1` instead of
+`localhost` fails closed here even though both reach the same Heka. The refusing log names both:
+
+```bash
+docker logs trustlens-agent 2>&1 | grep "status list origin"   # [agent] status list origin … is not …
+```
+
+Give the seed and every relying party the same `IDENTITY_SERVICE_URL` value — the socat bridge
+exists for exactly this, so containers can keep `http://localhost:3000`.
+
 ### Publisher domains do not resolve from a container
 
 Check the aliases:

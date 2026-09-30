@@ -193,11 +193,12 @@ integration; the emulator is not required if the simulated holder is acceptable.
 ## Verifying without the UI
 
 ```bash
-yarn test          # unit tests — one case per verdict
-yarn verify:live   # the engine against the running publishers; prints verdicts
-yarn derisk        # issue → status-bound → revoke → observe, against live Heka
-yarn derisk:holder # proves signed credential bytes can be captured
-yarn seed --check  # is the seed state complete
+yarn test                   # unit tests — one case per verdict
+yarn verify:live            # the engine against the running publishers; prints verdicts
+yarn derisk                 # issue → status-bound → revoke → observe, against live Heka
+yarn derisk:holder          # proves signed credential bytes can be captured
+yarn capture:presentation   # capture a real officer presentation as the decoder's test fixture
+yarn seed --check           # is the seed state complete
 ```
 
 `yarn verify:live` is the fastest end-to-end confidence check: it exercises did:hedera

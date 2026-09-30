@@ -5,9 +5,9 @@
  * Heka Web UI does not expose credential lifecycle actions, and because the demo needs the
  * revocations to be performed by the *issuer*, visibly, rather than by a script nobody saw.
  *
- * Everything here goes through the Identity Service's status-list API. The console holds no
- * state of its own — status is read live from the published status list, which is the same
- * document any relying party reads.
+ * Everything here goes through the Identity Service's status-list API. Status is read live from
+ * the published status list — the same document any relying party reads — and the console keeps
+ * only an in-memory journal of what it did (revocations, restores, offers).
  *
  * It also does the one issuer-side act the scenario needs before it starts: handing the operator
  * their Finance Data Officer credential. The offer is pushed to the wallet over DIDComm (see
@@ -19,6 +19,7 @@ import { resolve } from 'node:path'
 import * as dotenv from 'dotenv'
 import express from 'express'
 
+import { AuditLog } from '../core/audit'
 import { isRevokedInStatusList } from '../core/status-list'
 import { loadState, saveState, SeedState } from '../seed/state'
 import { DEMO_RESOURCES, OFFICER_CREDENTIAL, TRUSTCO } from '../shared/demo-config'
@@ -86,6 +87,10 @@ function main() {
   if (!state.statusListId) throw new Error('no seed state — run `yarn seed` first')
 
   const identityService = identityServiceFromEnv()
+  // The issuer's own journal. Revocations and offers are issuer acts, and an audience should be
+  // able to read them where they happened rather than infer them from a relying party's log.
+  const audit = new AuditLog()
+
   // Same link file as the Trust Lens: the operator pastes their wallet DID once, on either UI.
   const walletLink = new WalletLink({
     stateFile: WALLET_LINK_FILE,
@@ -135,6 +140,7 @@ function main() {
       saveState(state)
 
       if (!walletLink.status.linked) {
+        audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', { delivered: false, via: 'offer URI' })
         res.json({ offer, delivered: false, note: 'no wallet linked — scan or deep-link the offer instead' })
         return
       }
@@ -142,6 +148,10 @@ function main() {
       try {
         await walletLink.send(offer)
         console.log('[console] officer credential offer delivered to the operator’s wallet')
+        audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', {
+          delivered: true,
+          via: 'DIDComm basic message',
+        })
         res.json({ offer, delivered: true })
       } catch (error) {
         res.status(502).json({ offer, delivered: false, error: (error as Error).message })
@@ -164,10 +174,21 @@ function main() {
     try {
       await identityService.setRevoked(state.statusListId as string, [index], revoked)
       console.log(`[console] ${key} (index ${index}) -> ${revoked ? 'REVOKED' : 'active'}`)
+      const title = describe(state).find((tile) => tile.key === key)?.title ?? key
+      audit.record('revocation', title, revoked ? 'REVOKED' : 'RESTORED', {
+        key,
+        statusListIndex: index,
+        statusList: identityService.statusListUrl(state.statusListId as string),
+      })
       res.json({ ok: true, credentials: await readTiles(identityService, state) })
     } catch (error) {
       res.status(502).json({ error: (error as Error).message })
     }
+  })
+
+  app.get('/api/audit', (req, res) => {
+    const type = req.query.type ? String(req.query.type) : undefined
+    res.json({ events: audit.list({ type: type as never }) })
   })
 
   app.listen(PORT, () => {

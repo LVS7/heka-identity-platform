@@ -31,25 +31,25 @@ with no cache anywhere. The agent and the AS check after `ResponseVerified`
 (`src/agent/index.ts:315-333`, `src/mcp/auth-server.ts:187-200`); the verification engine checks
 last (`src/core/verify.ts`, step 6).
 
-| #   | Finding                                                                                                                                  | Evidence                                                                          | Group    |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------- |
-| G1  | `/api/engage` trusts the `verdict` in the request body; a revoked passport can still be engaged until the operator re-verifies           | `src/web/server.ts:200-216`, `src/web/public/app.js` (cached verdict map)         | B        |
-| G2  | Revoking the MCP passport (`acmeMcp`) changes only the badge; `/api/mcp/call` has no verdict gate                                        | `src/web/server.ts:277-316`                                                       | B        |
-| G3  | An issued MCP token outlives a revocation for up to 300 s; `forgetToken()` is never called; the docs prescribe `docker restart`           | `src/web/mcp-client.ts:66-69`, README kill-switch step, `ENHANCEMENTS.md` §3      | B        |
-| G4  | AS: `/token` does not re-check status; codes never expire                                                                                | `src/mcp/auth-server.ts:81, 203-247`                                              | C        |
-| G5  | Agent caches authorization per `contextId` forever; a client reusing a context never presents again                                      | `src/agent/index.ts:120, 216, 277`                                                | C        |
-| G6  | Agent and AS check the **seed-state officer slot** (index 3), not the presented credential's own `credentialStatus`; neither checks `iss` | `src/agent/index.ts:316-327`, `src/mcp/auth-server.ts:188-196`                    | A        |
-| G6b | Heka does not constrain the issuer of a presentation; an officer credential from any issuer is accepted                                  | no trusted-issuer setting anywhere in `heka-identity-service/src`                 | A        |
-| G7  | Missing seed state → the check is **skipped** (fail-open)                                                                                | `src/agent/index.ts:320-323`, `src/mcp/auth-server.ts:189`                        | A        |
-| G8  | A credential without `credentialStatus` verifies as `VERIFIED` and can never be revoked                                                  | `src/core/verify.ts` step 6; `verify.test.ts` baseline fixture has no status      | A        |
-| G9  | A malformed `statusListIndex` (`NaN`, `undefined`) reads as "not revoked"                                                                | `src/core/status-list.ts:43-53` (no validation of the claim)                      | A        |
-| G10 | The status list is unsigned and its `issuer` is never compared with the credential's                                                     | `src/core/status-list.ts:56-59`                                                   | C        |
-| G11 | Officer revocation is a role slot shared by every issued officer credential, and Restore un-revokes a `purpose: revocation` list          | `src/shared/officer-offer.ts:23`, `src/shared/identity-service.ts:116`            | accepted |
-| G12 | Console loads seed state once; after `yarn seed --reset` without a restart it revokes on the old list                                     | `src/console/server.ts:85`                                                        | C        |
-| G13 | Console is unauthenticated (demo) and records nothing; the `revocation` audit type exists and is never written                            | `src/core/types.ts:120`, `src/console/server.ts:154-171`                          | B        |
-| G14 | No timeout on the status-list fetch; a hanging endpoint stalls instead of refusing                                                       | `src/core/status-list.ts:69`                                                      | A        |
-| G15 | Error labels: an unreadable list shows as `Agent error: …` on A2A, not as a denial; on the AS the pending entry survives a 403            | `src/agent/index.ts:237-243`, `src/mcp/auth-server.ts:166,176`                    | A        |
-| G16 | Check-then-use: the agent checks once and then runs the report without looking again                                                     | `src/agent/index.ts:226-236`                                                      | accepted |
+| #   | Finding                                                                                                                                   | Evidence                                                                     | Group    |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------- |
+| G1  | `/api/engage` trusts the `verdict` in the request body; a revoked passport can still be engaged until the operator re-verifies            | `src/web/server.ts:200-216`, `src/web/public/app.js` (cached verdict map)    | B        |
+| G2  | Revoking the MCP passport (`acmeMcp`) changes only the badge; `/api/mcp/call` has no verdict gate                                         | `src/web/server.ts:277-316`                                                  | B        |
+| G3  | An issued MCP token outlives a revocation for up to 300 s; `forgetToken()` is never called; the docs prescribe `docker restart`           | `src/web/mcp-client.ts:66-69`, README kill-switch step, `ENHANCEMENTS.md` §3 | B        |
+| G4  | AS: `/token` does not re-check status; codes never expire                                                                                 | `src/mcp/auth-server.ts:81, 203-247`                                         | C        |
+| G5  | Agent caches authorization per `contextId` forever; a client reusing a context never presents again                                       | `src/agent/index.ts:120, 216, 277`                                           | C        |
+| G6  | Agent and AS check the **seed-state officer slot** (index 3), not the presented credential's own `credentialStatus`; neither checks `iss` | `src/agent/index.ts:316-327`, `src/mcp/auth-server.ts:188-196`               | A        |
+| G6b | Heka does not constrain the issuer of a presentation; an officer credential from any issuer is accepted                                   | no trusted-issuer setting anywhere in `heka-identity-service/src`            | A        |
+| G7  | Missing seed state → the check is **skipped** (fail-open)                                                                                 | `src/agent/index.ts:320-323`, `src/mcp/auth-server.ts:189`                   | A        |
+| G8  | A credential without `credentialStatus` verifies as `VERIFIED` and can never be revoked                                                   | `src/core/verify.ts` step 6; `verify.test.ts` baseline fixture has no status | A        |
+| G9  | A malformed `statusListIndex` (`NaN`, `undefined`) reads as "not revoked"                                                                 | `src/core/status-list.ts:43-53` (no validation of the claim)                 | A        |
+| G10 | The status list is unsigned and its `issuer` is never compared with the credential's                                                      | `src/core/status-list.ts:56-59`                                              | C        |
+| G11 | Officer revocation is a role slot shared by every issued officer credential, and Restore un-revokes a `purpose: revocation` list          | `src/shared/officer-offer.ts:23`, `src/shared/identity-service.ts:116`       | accepted |
+| G12 | Console loads seed state once; after `yarn seed --reset` without a restart it revokes on the old list                                     | `src/console/server.ts:85`                                                   | C        |
+| G13 | Console is unauthenticated (demo) and records nothing; the `revocation` audit type exists and is never written                            | `src/core/types.ts:120`, `src/console/server.ts:154-171`                     | B        |
+| G14 | No timeout on the status-list fetch; a hanging endpoint stalls instead of refusing                                                        | `src/core/status-list.ts:69`                                                 | A        |
+| G15 | Error labels: an unreadable list shows as `Agent error: …` on A2A, not as a denial; on the AS the pending entry survives a 403            | `src/agent/index.ts:237-243`, `src/mcp/auth-server.ts:166,176`               | A        |
+| G16 | Check-then-use: the agent checks once and then runs the report without looking again                                                      | `src/agent/index.ts:226-236`                                                 | accepted |
 
 What is **sound** and stays: the format, the no-cache policy, `verify.ts` failing closed on an
 unreadable list, the console reading status live, `yarn derisk` proving the Heka round trip, and
@@ -74,7 +74,8 @@ the fixtures captured from a live service.
 
 1. Agent and AS check the **presented credential**: `iss` must be the trusted issuer, `vct` must
    be the role credential, `credentialStatus` must be present and point at the issuer's service,
-   and the bit must be clear. No fallback to the seed slot. Missing anything → refuse.
+   and the bit must be clear, and the disclosed `role` must equal the officer role. No fallback
+   to the seed slot. Missing anything → refuse.
 2. A passport without `credentialStatus` gets a new verdict, `NO_STATUS` ("cannot be revoked, so
    cannot be trusted"), with its own row in the verdict table. Folding it into `REVOKED` was
    considered and rejected because it would hide the cause.
@@ -119,7 +120,11 @@ Display and policy need `iss`, `cnf`, `vct`, the disclosed claims and `credentia
 disclosures to match `_sd` digests (`node:crypto`, allowed in core like `node:zlib`).
 
 ```ts
-export interface SdJwtDisclosure { salt: string; name?: string; value: unknown }
+export interface SdJwtDisclosure {
+  salt: string
+  name?: string
+  value: unknown
+}
 export interface DecodedSdJwtPresentation {
   issuerJwt: { header: Record<string, unknown>; payload: Record<string, unknown> }
   disclosures: SdJwtDisclosure[]
@@ -173,15 +178,16 @@ export interface PresentationPolicy {
   trustedIssuers: string[]
   requiredVct: string                      // ROLE_CREDENTIAL_VCT
   statusListOrigin: string                 // origin of IDENTITY_SERVICE_URL — the issuer's list lives there
+  requiredClaims: Record<string, string>   // { role: OFFICER_CREDENTIAL.role } — disclosed with exactly this value
 }
 export interface StatusCheck { statusListCredential: string; statusListIndex: number; revoked: boolean; checkedAt: string }
 export type RefusalReason =
-  | 'not-verified' | 'wrong-type' | 'untrusted-issuer' | 'no-status' | 'foreign-status-list' | 'status-unavailable' | 'revoked'
+  | 'not-verified' | 'malformed' | 'wrong-type' | 'untrusted-issuer' | 'wrong-role' | 'no-status' | 'foreign-status-list' | 'status-unavailable' | 'revoked'
 export class PresentationRefused extends Error {
   constructor(public readonly reason: RefusalReason, message: string)
 }
 
-/** Pure: decode the session's vp_token. Throws PresentationRefused('not-verified') unless the state is ResponseVerified with a vp_token. */
+/** Pure: decode the session's vp_token. Throws 'not-verified' unless the state is ResponseVerified; 'malformed' if it then has no single vp_token. */
 export function readPresentedCredential(session: VerificationSessionRecord): PresentedCredential
 /** Policy + live status. Resolves with the StatusCheck; rejects with PresentationRefused otherwise. Never answers "unknown". */
 export async function assertPresentedCredentialValid(
@@ -193,15 +199,17 @@ export async function assertPresentedCredentialValid(
 
 Messages, because the docs and the UI key on them:
 
-| Reason               | Message                                                                         |
-| -------------------- | ------------------------------------------------------------------------------- |
-| `revoked`            | `the Finance Data Officer credential has been revoked by its issuer` (unchanged) |
-| `status-unavailable` | `status list unavailable, refusing to assume valid: <cause>`                     |
-| `untrusted-issuer`   | `credential issued by <iss>, which this relying party does not trust`            |
-| `no-status`          | `credential carries no status pointer and cannot be revoked`                     |
-| `foreign-status-list`| `credential points at a status list outside the issuer's service`                |
-| `wrong-type`         | `credential is not a <requiredVct>`                                              |
-| `not-verified`       | `no verified presentation yet (session is <state>)` (unchanged, used for polling)|
+| Reason                | Message                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| `revoked`             | `the Finance Data Officer credential has been revoked by its issuer` (unchanged)                          |
+| `status-unavailable`  | `status list unavailable, refusing to assume valid: <cause>`                                              |
+| `untrusted-issuer`    | `credential issued by <iss>, which this relying party does not trust`                                     |
+| `wrong-role`          | `credential claim "<name>" is "<value>", expected "<expected>"`                                           |
+| `no-status`           | `credential carries no status pointer and cannot be revoked`                                              |
+| `foreign-status-list` | `credential points at a status list outside the issuer's service`                                         |
+| `wrong-type`          | `credential is not a <requiredVct>`                                                                       |
+| `not-verified`        | `no verified presentation yet (session is <state>)` (unchanged, used for polling)                         |
+| `malformed`           | `presentation could not be decoded: <cause>` (Heka accepted it, so it should not happen; still a refusal) |
 
 Tests: one case per `RefusalReason`, one happy path returning `StatusCheck`, `vp_token` given as
 an array is accepted, `sharedAttributes` is ignored (the decoded token is authoritative).
@@ -345,8 +353,9 @@ Stack per `run-demo` (Heka, `yarn sites`, `yarn agent`, `yarn as`, `yarn mcp`, `
 4. **An A2A denial names the presented credential's status** — revoke the officer credential in
    the console UI (`http://localhost:4100`, Revoke on _Finance Data Officer_). In the Trust Lens:
    Discovery → Verify all → Engage _Acme Invoice Agent_ → **Simulate presentation (demo)**.
-   Expect the task to fail with `Authorization denied: the Finance Data Officer credential has
-   been revoked by its issuer`, and the agent log line
+   Expect the task to fail with
+   `Authorization denied: the Finance Data Officer credential has been revoked by its issuer`, and
+   the agent log line
    `[agent] status checked: index 3 on http://localhost:3000/credentials/status/<id> -> revoked`.
    Restore the credential, engage again, simulate: `completed`, agent log ends with `-> live`.
 
@@ -387,7 +396,7 @@ Stack per `run-demo` (Heka, `yarn sites`, `yarn agent`, `yarn as`, `yarn mcp`, `
 `README.md` (Flow 1 step 6 verdict list; kill-switch step), `docs/ARCHITECTURE.md` (verdicts;
 invariant 4 wording: "checks the presented credential's own status pointer"; decisions list),
 `docs/OPERATIONS.md` (no restart for the kill switch), `.claude/skills/demo-walkthrough/SKILL.md`
-§6, `ENHANCEMENTS.md` (§3 removed, verdict count in §5), new `docs/REVOCATION-AUDIT.md`.
+§6, `ENHANCEMENTS.md` (§3 removed, verdict count in the former §5, now §4), new `docs/REVOCATION-AUDIT.md`.
 
 ## Risks and open questions
 
@@ -395,7 +404,7 @@ invariant 4 wording: "checks the presented credential's own status pointer"; dec
   unwrapping) is asserted from Credo's record type, not yet observed. Capturing the fixture in A3
   is the first step of the task precisely so this is settled before B2 is written.
 - `NO_STATUS` cannot be produced on a running stand (every seeded passport has a pointer). It is
-  unit-tested only; ENHANCEMENTS §5 (seed flags for broken variants) would make it visible.
+  unit-tested only; ENHANCEMENTS §4 (seed flags for broken variants) would make it visible.
 - Re-verifying at engage adds Hedera resolution latency to every Engage click. If it is felt in
   a demo, cache DID documents in the verifier agent for the process lifetime (they are immutable
   for the demo's DIDs) — never status lists.
