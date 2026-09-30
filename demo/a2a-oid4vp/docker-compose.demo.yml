@@ -1,0 +1,33 @@
+# Runs the A2A + OID4VP demo (agent + CLI) in a Node 22 Linux container so the
+# native askar/ffi-napi crypto modules build cleanly (host is Node 24 + Windows
+# without MSVC C++ build tools, where they fail to compile).
+#
+# Identity Service is expected to run separately via
+#   heka-identity-service/docker-compose.dev.yml
+# and is reached from this container through host.docker.internal.
+#
+# Usage:
+#   docker compose -f docker-compose.demo.yml up -d
+#   # start the agent (background) then the interactive CLI:
+#   docker compose -f docker-compose.demo.yml exec demo bash -lc "corepack yarn agent"   # terminal 1
+#   docker compose -f docker-compose.demo.yml exec demo bash -lc "corepack yarn client"  # terminal 2
+services:
+  demo:
+    image: node:22-bookworm # full image: includes gcc/make/python3 for native builds
+    working_dir: /app
+    env_file: .env
+    environment:
+      # override localhost -> host so the container reaches the Identity Service
+      IDENTITY_SERVICE_URL: http://host.docker.internal:3000
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - .:/app
+      - demo_node_modules:/app/node_modules # isolated Linux-native node_modules
+    stdin_open: true
+    tty: true
+    # keep the container alive; install deps on first boot
+    command: bash -lc "corepack enable && corepack yarn install && tail -f /dev/null"
+
+volumes:
+  demo_node_modules:
