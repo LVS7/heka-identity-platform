@@ -719,6 +719,8 @@ function showView(name, replace = false) {
     .querySelectorAll('.tab[data-view]')
     .forEach((link) => link.classList.toggle('active', link.dataset.view === tab))
   document.title = `Trust Lens · ${VIEW_TITLE[name]}`
+  // The MCP tab fits the window and scrolls only inside the chat (app.css, body.view-mcp).
+  document.body.classList.toggle('view-mcp', name === 'mcp')
   syncUrl(name, replace)
 
   // The list refreshes only while it is on screen; task and step-up pollers keep running regardless.
@@ -736,11 +738,11 @@ function showView(name, replace = false) {
 
 // ---------- MCP tools ----------
 
-// The step-up in progress on this page: which tool to retry (or that the chat owns it), and the
-// authorization as last polled.
+// The step-up in progress on this page — always the chat's, since the chat is the only client on
+// the page — and the authorization as last polled.
 const mcp = { pending: null }
 const token = { expiresAt: 0 }
-const chat = { busy: false }
+const chat = { busy: false, rendered: '' }
 
 const SESSION_STATE = {
   RequestCreated: 'requested',
@@ -764,7 +766,7 @@ async function loadTools() {
   const data = await response.json()
 
   if (!response.ok) {
-    el('tools').innerHTML = `<p class="note">${escapeHtml(data.reason ?? data.error)}</p>`
+    el('mcp-tools').textContent = data.reason ?? data.error
     if (response.status === 403) renderConnection(null)
     return
   }
@@ -772,23 +774,13 @@ async function loadTools() {
   renderTokenStatus(data.token)
   renderConnection(data.connected)
 
-  el('tools').innerHTML = (data.tools ?? [])
-    .map(
-      (tool) => `
-        <article class="card">
-          <div>
-            <h3>${escapeHtml(tool.name)}</h3>
-            <div class="meta">
-              ${tool.requiredScope ? `<span class="chip">scope ${escapeHtml(tool.requiredScope)}</span>` : '<span class="chip">no elevated scope</span>'}
-            </div>
-          </div>
-          <div class="right">
-            <button data-tool="${escapeHtml(tool.name)}">Invoke</button>
-          </div>
-          <p class="desc">${escapeHtml(tool.description ?? '')}</p>
-        </article>`
-    )
-    .join('')
+  // Read-only: which tools exist and which one needs a scope is the least-privilege argument; the
+  // chat is what calls them.
+  const tools = (data.tools ?? []).map(
+    (tool) =>
+      `<code>${escapeHtml(tool.name)}</code> · ${tool.requiredScope ? `scope ${escapeHtml(tool.requiredScope)}` : 'no scope'}`
+  )
+  el('mcp-tools').innerHTML = tools.length ? `Tools on this server: ${tools.join(', ')}` : ''
 }
 
 /** With a status from the server the deadline is reset; without one the badge just counts down. */
@@ -799,6 +791,7 @@ function renderTokenStatus(status) {
   if (left > 0) {
     badge.className = `badge ${left <= 30 ? 'warn' : 'ok'}`
     badge.textContent = `token · ${mmss(left)} left`
+    el('token-note').textContent = '' // a fresh token makes the "dropped" note stale
   } else {
     badge.className = 'badge'
     badge.textContent = 'no token'
@@ -817,55 +810,11 @@ function mcpAuthorizationFrom(authorization) {
   }
 }
 
-/** The one auth panel serves the chat and the direct calls: it is moved into the paused chat step, and back. */
+/** The auth panel sits inside the paused chat step, and goes home between step-ups. */
 function placeAuthPanel(slot) {
   const panel = el('mcp-auth')
   const target = slot ?? el('mcp-auth-home')
   if (panel.parentElement !== target) target.appendChild(panel)
-}
-
-async function invokeTool(name, { retry = false } = {}) {
-  el('mcp-result').hidden = true
-  // A settled panel from an earlier step-up is cleared by a fresh Invoke; a live one is joined.
-  if (!retry && !mcp.pending) {
-    hideAuthPanel('mcp')
-    el('mcp-presentation').innerHTML = ''
-  }
-  placeAuthPanel(null)
-
-  const response = await fetch('/api/mcp/call', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ tool: name }),
-  })
-  const data = await response.json()
-
-  if (data.ok) {
-    el('mcp-result').hidden = false
-    const by = data.result?.authorizedBy
-    el('mcp-result').className = 'result'
-    el('mcp-result').textContent =
-      (by?.role ? `Authorized by ${by.role} · ${by.org}\n\n` : '') +
-      JSON.stringify(data.result?.rows ?? data.result, null, 2)
-    renderTokenStatus(data.token)
-    return
-  }
-
-  if (data.authorization) {
-    el('mcp-auth-title').textContent =
-      `${data.status === 403 ? 'Insufficient scope' : 'Authorization required'} — ${data.requiredScope}`
-    el('mcp-auth-message').textContent = data.authorization.message ?? ''
-    mcp.pending = { tool: name, authorization: mcpAuthorizationFrom(data.authorization) }
-    showAuthPanel('mcp', mcp.pending.authorization, null)
-    pollAuthorization()
-    return
-  }
-
-  el('mcp-result').hidden = false
-  el('mcp-result').className = 'result bad'
-  el('mcp-result').textContent = data.verdict
-    ? `refused: ${data.verdict} — ${data.reason}`
-    : (data.error ?? JSON.stringify(data, null, 2))
 }
 
 function pollAuthorization() {
@@ -888,41 +837,15 @@ function pollAuthorization() {
         return
       }
 
-      if (response.status === 403) {
+      // Decided either way: the paused step shows the outcome (retried with the presentation card,
+      // or denied). The server resumes the chat itself; the resume call here is belt and braces.
+      if (response.status === 403 || data.granted) {
         stopPoller('mcp-auth')
-        const { chat: viaChat, authorization } = mcp.pending
         mcp.pending = null
-        if (viaChat) {
-          // The chat step shows the denial; the server resumes the chat itself, this is belt and braces.
-          hideAuthPanel('mcp')
-          await fetch('/api/chat/resume', { method: 'POST' })
-          loadChat()
-          return
-        }
-        el('mcp-auth-title').textContent = 'Authorization denied'
-        showAuthPanel('mcp', { ...authorization, state: 'denied' }, data.presentation)
-        el('mcp-presentation').innerHTML = presentationCard(data.presentation)
-        el('mcp-result').hidden = false
-        el('mcp-result').className = 'result bad'
-        el('mcp-result').textContent = data.error
-        return
-      }
-
-      if (data.granted) {
-        stopPoller('mcp-auth')
-        const { tool, authorization, chat: viaChat } = mcp.pending
-        mcp.pending = null
-        renderTokenStatus(data.token)
-        if (viaChat) {
-          hideAuthPanel('mcp')
-          await fetch('/api/chat/resume', { method: 'POST' })
-          loadChat()
-          return
-        }
-        el('mcp-auth-title').textContent = 'Authorized'
-        showAuthPanel('mcp', { ...authorization, state: 'authorized', delivery: data.delivery }, data.presentation)
-        await invokeTool(tool, { retry: true }) // step-up complete: retry the original call
-        el('mcp-presentation').innerHTML = presentationCard(data.presentation)
+        if (data.granted) renderTokenStatus(data.token)
+        hideAuthPanel('mcp')
+        await fetch('/api/chat/resume', { method: 'POST' })
+        loadChat()
         return
       }
 
@@ -957,9 +880,7 @@ async function dropToken() {
   const response = await fetch('/api/mcp/token', { method: 'DELETE' })
   const data = await response.json()
   renderTokenStatus(data.token)
-  el('mcp-result').hidden = false
-  el('mcp-result').className = 'result'
-  el('mcp-result').textContent =
+  el('token-note').textContent =
     'Cached token dropped. The next sensitive call has to authorize again — against the credential as it stands now.'
 }
 
@@ -1025,21 +946,32 @@ function renderChat(view) {
   status.className = `note ${view.state === 'error' ? 'text-bad' : ''}`
   status.textContent = view.state === 'error' ? `Error: ${view.error}` : (CHAT_STATUS[view.state] ?? '')
 
-  // The panel lives inside the transcript while a step is paused; innerHTML would destroy it, so
-  // it goes home before the re-render and into the fresh slot after.
-  placeAuthPanel(null)
-  el('chat-steps').innerHTML = (view.steps ?? []).map(renderChatStep).join('')
-
+  // The poll runs every 1.5 s; rewriting the transcript each time would reset the person's scroll
+  // and move the panel home and back. Rewrite only when the conversation changed.
   const paused = view.state === 'paused-authorization' && view.authorization
-  if (paused) {
-    if (!mcp.pending?.chat) {
-      el('mcp-auth-title').textContent = `Authorization required — ${view.authorization.scope}`
-      el('mcp-auth-message').textContent = view.authorization.message ?? ''
-      mcp.pending = { chat: true, authorization: mcpAuthorizationFrom(view.authorization) }
-      showAuthPanel('mcp', mcp.pending.authorization, null)
-      pollAuthorization()
-    }
-    placeAuthPanel(el('chat-steps').querySelector('.auth-slot'))
+  const key = JSON.stringify([view.state, view.steps])
+  if (key !== chat.rendered) {
+    chat.rendered = key
+    const scroller = el('chat-scroll')
+    const atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40
+    // The panel lives inside the paused step; innerHTML would destroy it, so it goes home before
+    // the rewrite and into the fresh slot after.
+    placeAuthPanel(null)
+    el('chat-steps').innerHTML = (view.steps ?? []).map(renderChatStep).join('')
+    if (paused) placeAuthPanel(el('chat-steps').querySelector('.auth-slot'))
+    // Follow the conversation only if the person was following it, not reading further up.
+    if (atBottom) scroller.scrollTop = scroller.scrollHeight
+  }
+
+  if (paused && !mcp.pending?.chat) {
+    el('mcp-auth-title').textContent = `Authorization required — ${view.authorization.scope}`
+    el('mcp-auth-message').textContent = view.authorization.message ?? ''
+    mcp.pending = { chat: true, authorization: mcpAuthorizationFrom(view.authorization) }
+    showAuthPanel('mcp', mcp.pending.authorization, null)
+    pollAuthorization()
+    // A new pause is brought into view even if the person had scrolled up: it waits for them.
+    const step = el('chat-steps').querySelector('.auth-slot')?.closest('li')
+    if (step) el('chat-scroll').scrollTop = step.offsetTop - 8
   }
 }
 
@@ -1155,10 +1087,6 @@ el('chat-form').addEventListener('submit', (event) => {
   sendChat()
 })
 el('chat-reset').addEventListener('click', resetChat)
-el('tools').addEventListener('click', (event) => {
-  const button = event.target.closest('[data-tool]')
-  if (button) invokeTool(button.dataset.tool)
-})
 
 document.querySelectorAll('.tab[data-view]').forEach((tab) => {
   tab.addEventListener('click', (event) => {

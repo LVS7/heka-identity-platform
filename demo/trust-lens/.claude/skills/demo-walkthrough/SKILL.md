@@ -112,7 +112,7 @@ curl -s http://localhost:4000/api/chat | jq '{state, steps: [.steps[] | {kind, t
 curl -s http://localhost:4000/api/audit | jq '.events[0:3]'   # via: "LLM chat"
 ```
 
-**Direct calls**, the same chain by hand:
+**Without the chat (curl)** — the same chain through the API (the UI has no Invoke buttons):
 
 ```bash
 curl -s -X POST http://localhost:4000/api/mcp/call -H "content-type: application/json" \

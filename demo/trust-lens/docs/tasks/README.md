@@ -1,9 +1,9 @@
-# Task briefs — Trust Lens improvements (September 2026)
+# Task briefs — Trust Lens improvements (September–October 2026)
 
-Five pieces of work planned for the Trust Lens demo, one brief each. A brief is what you hand to
-whoever does the work and what you check against afterwards: why, what is wrong today (with
-evidence), what is in and out of scope, the decisions already taken, a phased plan, a Definition of
-Done and the steps to validate it.
+Six pieces of work planned for the Trust Lens demo, one brief each (1–5 in September, 6 on
+2026-10-01). A brief is what you hand to whoever does the work and what you check against
+afterwards: why, what is wrong today (with evidence), what is in and out of scope, the decisions
+already taken, a phased plan, a Definition of Done and the steps to validate it.
 
 Briefs are deliberately **not** code-level plans. When a task starts, a code-level plan
 (`superpowers:writing-plans`, saved under `docs/superpowers/plans/`) is derived from the brief.
@@ -22,11 +22,15 @@ litvinov-demo
             └─ task/03-presentation-ux
                  └─ task/04-agent-server-view
                       └─ task/05-mcp-llm-chat
+
+litvinov-demo (T1–T5 squash-merged)
+  └─ task/06-mcp-chat-authorization
 ```
 
 So task 2 branches from `task/01-revocation`, task 3 from `task/02-console-styling`, and so on.
 Every branch therefore already contains all earlier tasks; the last column names what a task
-actually builds on.
+actually builds on. Task 6 was added after T1–T5 were merged into `litvinov-demo`, so it
+branches from there.
 
 | #   | Brief                                                            | Branch                       | Branches from                | Builds on                                                                             |
 | --- | ---------------------------------------------------------------- | ---------------------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
@@ -35,6 +39,7 @@ actually builds on.
 | 3   | [Presentation in engagements](03-presentation-in-engagements.md) | `task/03-presentation-ux`    | `task/02-console-styling`    | 1's `PresentedCredential` / `StatusCheck`, 2's `ui.js`                                |
 | 4   | [Agent server view](04-agent-server-view.md)                     | `task/04-agent-server-view`  | `task/03-presentation-ux`    | 1's types, 2's `ui.js`, what 3 makes the agent record                                 |
 | 5   | [MCP LLM chat](05-mcp-llm-chat.md)                               | `task/05-mcp-llm-chat`       | `task/04-agent-server-view`  | 1's engage preflight and Drop token, 3's step-up panel and presentation card          |
+| 6   | [MCP chat authorization](06-mcp-chat-authorization.md)            | `task/06-mcp-chat-authorization` | `litvinov-demo`            | T1–T5 merged into `litvinov-demo`; fixes T5's chat so it reaches the step-up        |
 
 ## Conventions for every task
 

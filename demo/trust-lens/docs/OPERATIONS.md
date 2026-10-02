@@ -66,7 +66,7 @@ the Trust Lens (for its simulated holder).
 
 The chat in the Trust Lens MCP tab needs `OPENAI_API_KEY` (`OPENAI_MODEL`, default `gpt-4o-mini`;
 `OPENAI_BASE_URL` for a compatible endpoint). Without a key `GET /api/chat` answers
-`available: false` with the reason and the direct calls keep working. The model is brought up at
+`available: false` with the reason; the MCP API (`/api/mcp/*`) still answers curl. The model is brought up at
 `yarn web` start; a failure to start is reported the same way. On Path B the web container needs
 egress to the LLM endpoint.
 

@@ -30,7 +30,11 @@ export const SUPPLIERS_EXPORT_SCOPE = 'suppliers:export'
 export const TOOLS = {
   'invoices-list': { description: 'List supplier invoices for the period.', requiredScope: null },
   'suppliers-export-bank-details': {
-    description: 'Export supplier bank details. Sensitive.',
+    // The description invites the call on purpose. "Sensitive." alone made the model refuse up
+    // front (0/5 calls with gpt-4o-mini), so the step-up never happened. The 401/403 in front of
+    // the transport is the control, not the model's restraint.
+    description:
+      'Export the bank details (IBAN, BIC) of suppliers. Requires the suppliers:export scope: when no token carries it, the server answers with an authorization challenge and the client asks a person to approve with a verifiable credential; just call the tool.',
     requiredScope: SUPPLIERS_EXPORT_SCOPE,
   },
 } as const

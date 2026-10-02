@@ -958,16 +958,29 @@ code {
   }
 }
 
-/* ---------- MCP tab: chat first, direct calls below ---------- */
+/* ---------- MCP tab: the chat ---------- */
 
-.connection {
+.connection,
+.tools-line {
   color: var(--muted);
   font-size: 12.5px;
   margin: 4px 0 14px;
 }
 
-.connection:empty {
+.connection:not(:empty) + .tools-line {
+  margin-top: -10px;
+}
+
+.connection:empty,
+.tools-line:empty,
+.token-note:empty {
   display: none;
+}
+
+.token-note {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .chat-panel {
@@ -987,8 +1000,55 @@ code {
   color: var(--warn);
 }
 
-.timeline.chat {
+/* On the MCP tab the page is exactly the window and only the transcript scrolls: the header, the
+   connection lines and the input stay put, the chat panel takes whatever height is left. */
+body.view-mcp {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+body.view-mcp main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Same outer width as the block layout (1080px content + padding); a flex item would shrink. */
+  width: 100%;
+  max-width: 1136px;
+  box-sizing: border-box;
+  padding-bottom: 24px;
+}
+
+#mcp.view.active {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#mcp .chat-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+/* Positioned so a step's offsetTop is measured against the scroller when a paused step is
+   brought into view. */
+.chat-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
   margin-top: 12px;
+  padding-right: 4px;
+}
+
+.timeline.chat {
+  margin-top: 0;
 }
 
 .timeline.chat:empty {

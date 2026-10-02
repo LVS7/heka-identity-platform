@@ -102,9 +102,11 @@
           scope is only granted against a verified presentation.
           <span id="token-status" class="badge"></span>
           <button id="token-drop" hidden>Drop token</button>
+          <span class="token-note" id="token-note"></span>
         </p>
         <p class="mcp-engaged" id="mcp-engaged" hidden></p>
         <p class="connection" id="mcp-connection"></p>
+        <p class="tools-line" id="mcp-tools"></p>
 
         <section class="chat-panel">
           <h3>Chat</h3>
@@ -113,7 +115,9 @@
             and the model waits for the person.
           </p>
           <p class="note warn" id="chat-unavailable" hidden></p>
-          <ol id="chat-steps" class="timeline chat"></ol>
+          <div class="chat-scroll" id="chat-scroll">
+            <ol id="chat-steps" class="timeline chat"></ol>
+          </div>
           <p id="chat-status" class="note"></p>
           <form id="chat-form">
             <input
@@ -128,9 +132,7 @@
           </form>
         </section>
 
-        <h3>Direct calls</h3>
-        <div id="tools" class="cards"></div>
-
+        <!-- The panel's home between step-ups; while the chat is paused it sits inside the paused step. -->
         <div id="mcp-auth-home">
           <div id="mcp-auth" class="auth-panel" hidden>
             <h3 id="mcp-auth-title">Authorization required</h3>
@@ -160,9 +162,6 @@
             </div>
           </div>
         </div>
-
-        <div id="mcp-presentation"></div>
-        <pre id="mcp-result" class="result" hidden></pre>
       </section>
 
       <section id="audit" class="view">

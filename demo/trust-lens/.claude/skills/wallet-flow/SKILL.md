@@ -115,7 +115,7 @@ Same mechanism for both protocol paths — only the verifier differs.
 curl -s -X POST http://localhost:4000/api/task/<id>/send-to-wallet     # once state is auth-required
 ```
 
-**MCP.** Invoke `suppliers-export-bank-details`, press **Send to wallet** on the scope challenge, or
+**MCP.** Ask the chat to export the suppliers' bank details, press **Send to wallet** in the paused step, or
 `curl -s -X POST http://localhost:4000/api/mcp/send-to-wallet`.
 
 Either way the wallet shows a Proof Request listing `role` and `org` — **the person taps Share**.
