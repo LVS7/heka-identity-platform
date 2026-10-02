@@ -99,7 +99,9 @@ sleep 2
 --network-alias acme-invoices.example --network-alias acme-invoices-ai.example
 ```
 
-**Agent** — the A2A client connects to the URL _in the agent card_, so it must be reachable:
+**Agent** — the Trust Lens connects to the URL _in the published agent card_, which the seed
+writes from `ACME_AGENT_URL`. Seed with `ACME_AGENT_URL=http://trustlens-agent:10003/` (and
+`MCP_PUBLIC_URL=http://trustlens-mcp:4400`) in containers; the agent's own card uses:
 
 ```
 --name trustlens-agent -p 10003:10003
@@ -133,10 +135,9 @@ sleep 2
 --name trustlens-console -p 4100:4100 -e TRUSTCO_CONSOLE_PORT=4100
 ```
 
-**Wallet link ports.** The web and the console each open an inbound DIDComm transport
-(`TRUST_LENS_DIDCOMM_PORT=4010`, `TRUSTCO_CONSOLE_DIDCOMM_PORT=4110`). Delivery only needs
-outbound, so the ports need no `-p`; they just must not collide. The link itself lives in
-`.wallet-link.json` in the repo directory, so both containers see it through the mount.
+**Wallet link.** Delivery to the wallet is outbound only — no DIDComm port is opened, so none
+needs a `-p`. The link itself lives in `.wallet-link.json` in the repo directory, so both
+containers see it through the mount.
 
 ## 4. Confirm it is actually up
 

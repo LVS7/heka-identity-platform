@@ -1,16 +1,16 @@
 /**
  * Trust Lens — the orchestrator surface.
  *
- * A thin backend over the verification engine. Discovery goes through the ARD registry when one
- * is configured (relevance only, never trust); when it is not, the same publishers are crawled
- * directly so the demo runs standalone. Either way, verification re-fetches everything from the
- * publisher, so what the registry says never affects a verdict.
+ * A thin backend over the verification engine. Discovery crawls the publishers' catalogs directly
+ * (registry ingestion is blocked upstream, spec/ADR-002), returning the shape a registry would:
+ * relevance only, never trust. Verification re-fetches everything from the publisher regardless,
+ * so a registry could never affect a verdict.
  */
 
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import * as dotenv from 'dotenv'
+import { AgentCard } from '@a2a-js/sdk'
 import express from 'express'
 
 import { AuditLog } from '../core/audit'
@@ -19,6 +19,7 @@ import { verifyEntry } from '../core/verify'
 import { createVerifierAgent, verifierDependencies, VerifierAgent } from '../shared/credential-verifier'
 import { ACME_DOMAIN, PRO_DOMAIN, TRUSTCO } from '../shared/demo-config'
 import { identityServiceFromEnv } from '../shared/identity-service'
+import { listenOrExit } from '../shared/listen'
 import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
 import { credoWalletTransport } from '../shared/wallet-link-credo'
 import { loadState } from '../seed/state'
@@ -37,10 +38,14 @@ const PUBLISHERS = [ACME_DOMAIN, PRO_DOMAIN]
 const AGENT_URL = process.env.ACME_AGENT_URL ?? `http://localhost:${process.env.ACME_AGENT_PORT ?? 10003}`
 const DEFAULT_TASK_PROMPT = 'Reconcile May supplier invoices and prepare the payment export.'
 const MCP_URL = process.env.MCP_PUBLIC_URL ?? `http://localhost:${process.env.MCP_PORT ?? 4400}`
-const DIDCOMM_PORT = Number(process.env.TRUST_LENS_DIDCOMM_PORT ?? 4010)
 
 // The publisher sites use a self-signed development certificate.
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+
+/** Every outbound fetch on the demo path is bounded: a hung (not refused) publisher must not freeze a click. */
+const FETCH_TIMEOUT_MS = 5_000
+const timedFetch: typeof fetch = (input, init) =>
+  fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS) })
 
 interface DiscoveredEntry {
   entry: AiCatalogEntry
@@ -50,8 +55,45 @@ interface DiscoveredEntry {
   source: string
 }
 
+interface Discovery {
+  results: DiscoveredEntry[]
+  /** Publishers whose catalog could not be read — named, so a refusal can say why. */
+  unreachable: string[]
+}
+
+interface Target {
+  identifier: string
+  publisher?: string
+}
+
+/** The verify request's targets, from untyped JSON: anything else is ignored rather than trusted. */
+function verifyTargets(body: unknown): Target[] {
+  const { targets, identifiers } = (body ?? {}) as { targets?: unknown; identifiers?: unknown }
+  if (Array.isArray(targets)) {
+    return targets
+      .filter((t): t is { identifier: unknown; publisher?: unknown } => typeof t === 'object' && t !== null)
+      .map((t) => ({
+        identifier: String(t.identifier ?? ''),
+        publisher: t.publisher ? String(t.publisher) : undefined,
+      }))
+  }
+  if (Array.isArray(identifiers)) return identifiers.map((identifier) => ({ identifier: String(identifier) }))
+  return []
+}
+
+interface VerifyResult {
+  identifier: string
+  publisher: string
+  displayName: string
+  verdict: string
+  engageable: boolean
+  evidence: unknown
+  auditId: string
+  verifiedAt?: string
+}
+
 async function fetchCatalog(domain: string): Promise<AiCatalog> {
-  const response = await fetch(`https://${domain}${SITE_SUFFIX}/.well-known/ai-catalog.json`)
+  const response = await timedFetch(`https://${domain}${SITE_SUFFIX}/.well-known/ai-catalog.json`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return (await response.json()) as AiCatalog
 }
@@ -72,22 +114,28 @@ function relevance(entry: AiCatalogEntry, query: string): number {
   return Math.round((hits / terms.length) * 90) + (entry.type.includes('a2a') ? 3 : 1)
 }
 
-async function discover(query: string): Promise<DiscoveredEntry[]> {
-  const discovered: DiscoveredEntry[] = []
+/** The publishers' catalogs as served now. A publisher that cannot be read is named, not dropped. */
+async function discover(query: string, domains: string[] = PUBLISHERS): Promise<Discovery> {
+  const results: DiscoveredEntry[] = []
+  const unreachable: string[] = []
 
-  for (const domain of PUBLISHERS) {
-    try {
-      const catalog = await fetchCatalog(domain)
-      for (const entry of catalog.entries) {
-        const score = relevance(entry, query)
-        if (score > 0) discovered.push({ entry, servingDomain: domain, score, source: domain })
+  await Promise.all(
+    domains.map(async (domain) => {
+      try {
+        for (const entry of (await fetchCatalog(domain)).entries) {
+          const score = relevance(entry, query)
+          if (score > 0) results.push({ entry, servingDomain: domain, score, source: domain })
+        }
+      } catch (error) {
+        unreachable.push(domain)
+        console.warn(`[web] could not read the catalog at ${domain}: ${(error as Error).message}`)
       }
-    } catch (error) {
-      console.warn(`[web] could not read the catalog at ${domain}: ${(error as Error).message}`)
-    }
-  }
+    })
+  )
 
-  return discovered.sort((a, b) => b.score - a.score)
+  // Read in parallel; ties keep the publishers' order, not whichever catalog answered first.
+  results.sort((a, b) => b.score - a.score || PUBLISHERS.indexOf(a.source) - PUBLISHERS.indexOf(b.source))
+  return { results, unreachable }
 }
 
 function main() {
@@ -95,16 +143,23 @@ function main() {
   if (!state.issuerDid) throw new Error('no seed state — run `yarn seed` first')
 
   const audit = new AuditLog()
-  const tasks = new TaskTracker(AGENT_URL, audit, identityServiceFromEnv())
+  const tasks = new TaskTracker(audit, identityServiceFromEnv(), { agentUrl: AGENT_URL })
   const mcp = new McpConnection(new TrustLensOAuthProvider())
   // The operator's phone. Credo is only brought up on first use, so a stand without a wallet
   // pays nothing for this.
   const walletLink = new WalletLink({
     stateFile: WALLET_LINK_FILE,
     initialDid: process.env.HOLDER_PUBLIC_DID,
-    transport: () => credoWalletTransport({ label: 'trust-lens-wallet-link', inboundPort: DIDCOMM_PORT }),
+    transport: () => credoWalletTransport({ label: 'trust-lens-wallet-link' }),
   })
   let verifierReady: Promise<VerifierAgent> | undefined
+
+  /** Read per use: `yarn seed --reset` mints a new issuer, and a cached one would refuse everything. */
+  const trustedIssuer = (): string => {
+    const issuerDid = loadState().issuerDid
+    if (!issuerDid) throw new Error('no seed state — run `yarn seed` first')
+    return issuerDid
+  }
 
   /**
    * The verifier agent is brought up on first use; a stand that never verifies pays nothing for it.
@@ -124,7 +179,7 @@ function main() {
       )
     }
     const agent = await verifierReady
-    return { trustedIssuers: [state.issuerDid as string], ...verifierDependencies(agent) }
+    return { trustedIssuers: [trustedIssuer()], ...verifierDependencies(agent), fetchFn: timedFetch }
   }
 
   const mcpPath = new McpPath({
@@ -132,7 +187,7 @@ function main() {
     mcp,
     tasks,
     walletLink,
-    discover: () => discover(''),
+    discover: (domain) => discover('', [domain]),
     verifierOptions,
     envMcpUrl: MCP_URL,
   })
@@ -150,7 +205,7 @@ function main() {
 
   app.get('/api/config', (_req, res) => {
     res.json({
-      trustedIssuers: [state.issuerDid],
+      trustedIssuers: [loadState().issuerDid],
       trustedIssuerName: TRUSTCO.name,
       publishers: PUBLISHERS,
       registry: process.env.REGISTRY_URL ?? null,
@@ -174,14 +229,19 @@ function main() {
   })
 
   app.delete('/api/wallet/link', async (_req, res) => {
-    await walletLink.unlink()
-    res.json(walletLink.status)
+    try {
+      await walletLink.unlink()
+      res.json(walletLink.status)
+    } catch (error) {
+      // The link file could not be removed (EBUSY on Windows, say): say so rather than claim "not linked".
+      res.status(500).json({ error: (error as Error).message })
+    }
   })
 
   app.get('/api/discovery', async (req, res) => {
     try {
       const query = String(req.query.q ?? '')
-      const results = await discover(query)
+      const { results, unreachable } = await discover(query)
       res.json({
         query,
         // Surfaced so the UI can say out loud that ranking is not trust.
@@ -196,29 +256,35 @@ function main() {
           source,
           hasAttestation: Boolean(entry.trustManifest?.attestations?.length),
         })),
+        unreachable,
       })
     } catch (error) {
       res.status(500).json({ error: (error as Error).message })
     }
   })
 
+  /**
+   * Verify what is asked for — `targets` ({identifier, publisher}), or the older `identifiers` — or
+   * everything published. An identifier is the publisher's own claim, so a target names both.
+   */
   app.post('/api/verify', async (req, res) => {
     try {
-      const identifiers: string[] | undefined = req.body?.identifiers
-      const discovered = await discover('')
-      const targets = identifiers?.length
-        ? discovered.filter((item) => identifiers.includes(item.entry.identifier))
-        : discovered
+      const wanted = verifyTargets(req.body).filter((t) => !t.publisher || PUBLISHERS.includes(t.publisher))
+      const { results: discovered, unreachable } = await discover('')
+      const matches = (item: DiscoveredEntry, target: Target) =>
+        item.entry.identifier === target.identifier && (!target.publisher || item.servingDomain === target.publisher)
+      const targets = wanted.length ? discovered.filter((item) => wanted.some((t) => matches(item, t))) : discovered
 
       const options = await verifierOptions()
-
-      const results = []
+      // One after another, not in parallel: the entries share an issuer, and concurrent first
+      // resolutions of one DID collide in Credo's persisted DID cache ("Duplicate entry").
+      const results: VerifyResult[] = []
       for (const { entry, servingDomain } of targets) {
         const result = await verifyEntry(entry, { servingDomain }, options)
         const event = audit.record('verification', entry.displayName, result.verdict, result.evidence)
-
         results.push({
           identifier: entry.identifier,
+          publisher: servingDomain,
           displayName: entry.displayName,
           verdict: result.verdict,
           engageable: result.verdict === Verdict.Verified,
@@ -228,7 +294,25 @@ function main() {
         })
       }
 
-      res.json({ results })
+      // Asked for, but its publisher could not be read: not VERIFIED, and that is a recorded refusal
+      // rather than an entry that silently drops out of the answer.
+      for (const target of wanted) {
+        if (targets.some((item) => matches(item, target))) continue
+        if (!target.publisher || !unreachable.includes(target.publisher)) continue
+        const failureDetail = `the catalog at ${target.publisher} could not be read`
+        const event = audit.record('verification', target.identifier, 'UNAVAILABLE', { failureDetail })
+        results.push({
+          identifier: target.identifier,
+          publisher: target.publisher,
+          displayName: target.identifier,
+          verdict: 'UNAVAILABLE',
+          engageable: false,
+          evidence: { failureDetail },
+          auditId: event.id,
+        })
+      }
+
+      res.json({ results, unreachable })
     } catch (error) {
       res.status(500).json({ error: (error as Error).message })
     }
@@ -237,14 +321,31 @@ function main() {
   /**
    * Engage a resource. Fail closed: the resource is re-verified here and now, and whatever verdict
    * the browser holds is not consulted — a stale or forged VERIFIED must not start a task. The
-   * cost is one more Hedera resolution per Engage; the alternative is a gate that trusts the caller.
+   * cost is a fresh fetch of the catalog, attestation, card and status list; the alternative is a
+   * gate that trusts the caller.
    */
   app.post('/api/engage', async (req, res) => {
     const identifier = String(req.body?.identifier ?? '')
+    const publisher = req.body?.publisher ? String(req.body.publisher) : undefined
+    // Only the configured publishers are fetched: the body must not point the server at any host.
+    if (publisher && !PUBLISHERS.includes(publisher)) {
+      res.status(400).json({ error: `unknown publisher "${publisher}"` })
+      return
+    }
 
     try {
-      const target = (await discover('')).find((item) => item.entry.identifier === identifier)
+      const { results, unreachable } = await discover('', publisher ? [publisher] : PUBLISHERS)
+      const target = results.find(
+        (item) => item.entry.identifier === identifier && (!publisher || item.servingDomain === publisher)
+      )
       if (!target) {
+        if (unreachable.length) {
+          // Cannot re-verify, so cannot engage — and that refusal is a trust decision like any other.
+          const reason = `the catalog at ${unreachable.join(', ')} could not be read`
+          const refusal = audit.record('engagement_refused', identifier, 'UNAVAILABLE', { reason })
+          res.status(503).json({ error: `refused: ${reason}`, verdict: 'UNAVAILABLE', auditId: refusal.id })
+          return
+        }
         res.status(404).json({ error: 'unknown resource' })
         return
       }
@@ -272,9 +373,15 @@ function main() {
       }
 
       const task = await tasks.start(
-        target.entry.displayName,
+        {
+          identifier,
+          publisher: target.servingDomain,
+          resource: target.entry.displayName,
+          card: result.card as AgentCard | undefined,
+        },
         String(req.body?.prompt ?? DEFAULT_TASK_PROMPT),
-        preflight
+        preflight,
+        req.body?.contextId ? String(req.body.contextId) : undefined
       )
       res.json({ ok: true, kind: 'agent', taskId: task.id, ...preflight })
     } catch (error) {
@@ -294,8 +401,10 @@ function main() {
   /** Every engagement this process has seen, newest first — enough for a list; open one for the rest. */
   app.get('/api/tasks', (_req, res) => {
     res.json({
-      tasks: tasks.list().map(({ id, resource, state, startedAt, a2a, presentation }) => ({
+      tasks: tasks.list().map(({ id, identifier, publisher, resource, state, startedAt, a2a, presentation }) => ({
         id,
+        identifier,
+        publisher,
         resource,
         state,
         startedAt,
@@ -356,10 +465,15 @@ function main() {
     res.json({ events: audit.list({ type: type as never }) })
   })
 
-  app.listen(PORT, () => {
+  listenOrExit(app, PORT, 'web', () => {
     console.log(`[web] Trust Lens on http://localhost:${PORT}`)
     console.log(`[web] trusted issuer: ${state.issuerDid}`)
   })
+
+  // Start the verifier now rather than on the first Verify all, which is the first click an audience sees.
+  verifierOptions().catch((error: unknown) =>
+    console.warn(`[web] verifier not ready yet: ${(error as Error).message}; the first verification retries`)
+  )
 }
 
 try {

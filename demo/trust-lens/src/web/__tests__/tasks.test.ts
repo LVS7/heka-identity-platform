@@ -1,8 +1,11 @@
 import { TaskStatusUpdateEvent } from '@a2a-js/sdk'
 import { describe, expect, it } from 'vitest'
 
+import { AuditLog } from '../../core/audit'
+import { IdentityServiceClient } from '../../shared/identity-service'
+
 import { IN_TASK_OID4VP_EXTENSION_URI, InTaskOpenId4VpMessageMetadata } from '../../agent/extension'
-import { applyStatusUpdate, TrackedTask } from '../tasks'
+import { applyStatusUpdate, TaskTracker, TrackedTask } from '../tasks'
 
 const REQUESTED = {
   purpose: 'Authorize the export',
@@ -36,6 +39,8 @@ function update(
 
 const fresh = (): TrackedTask => ({
   id: 't1',
+  identifier: 'urn:air:acme-invoices.example:finance:invoice-agent',
+  publisher: 'acme-invoices.example',
   resource: 'Acme Invoice Agent',
   state: 'submitted',
   startedAt: '2026-09-28T09:59:59.000Z',
@@ -154,11 +159,63 @@ describe('applyStatusUpdate', () => {
     expect(task.presentation?.source).toBe('unknown')
   })
 
+  it('settles as failed, not denied, when the agent fails without deciding', () => {
+    const task = fresh()
+    applyStatusUpdate(task, authRequired())
+    applyStatusUpdate(task, update('failed', 'Agent error: connect ECONNREFUSED'))
+
+    expect(task.authorization?.state).toBe('failed')
+    expect(task.presentation).toBeUndefined()
+  })
+
   it('leaves a task without the extension untouched beyond state and events', () => {
     const task = fresh()
     applyStatusUpdate(task, update('working', 'Reconciling…'))
 
     expect(task.authorization).toBeUndefined()
     expect(task.events[0]).toEqual({ at: '2026-09-28T10:00:00.000Z', state: 'working', text: 'Reconciling…' })
+  })
+})
+
+describe('TaskTracker.start', () => {
+  const target = {
+    identifier: 'urn:air:acme-invoices.example:finance:invoice-agent',
+    publisher: 'acme-invoices.example',
+    resource: 'Acme Invoice Agent',
+  }
+
+  function tracker() {
+    const sent: unknown[] = []
+    const used: unknown[] = []
+    const tasks = new TaskTracker(new AuditLog(), {} as IdentityServiceClient, {
+      agentUrl: 'http://agent',
+      client: (card) => {
+        used.push(card)
+        return {
+          // A stand-in for the SDK's stream: records the request and ends at once.
+          sendMessageStream: async function* (params: unknown) {
+            sent.push(params)
+          },
+        }
+      },
+    })
+    return { tasks, sent, used }
+  }
+
+  it('continues an earlier context when asked to', async () => {
+    const { tasks, sent } = tracker()
+    await tasks.start(target, 'Run it again', undefined, 'ctx-1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(sent[0]).toMatchObject({ message: { contextId: 'ctx-1', parts: [{ text: 'Run it again' }] } })
+  })
+
+  it('talks to the verified card when it has one, and to the configured URL otherwise', async () => {
+    const card = { name: 'Acme Invoice Agent', url: 'http://verified/' }
+    const { tasks, used } = tracker()
+    await tasks.start({ ...target, card: card as never }, 'Go')
+    await tasks.start(target, 'Go')
+
+    expect(used).toEqual([card, 'http://agent'])
   })
 })

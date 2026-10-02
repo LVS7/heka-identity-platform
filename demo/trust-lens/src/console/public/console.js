@@ -91,7 +91,7 @@ function renderOffer() {
   const status = lastOffer.error
     ? `<div class="delivery failed">Delivery failed: ${escapeHtml(lastOffer.error)}</div>`
     : lastOffer.delivered
-      ? '<div class="delivery sent">Offer delivered to the operator’s wallet over DIDComm — the person taps <strong>Accept</strong> there.</div>'
+      ? '<div class="delivery sent">Offer handed to the operator’s wallet over DIDComm — when it appears, the person taps <strong>Accept</strong> there.</div>'
       : `<div class="delivery">${escapeHtml(lastOffer.note ?? 'Offer minted — scan it with Heka Wallet.')}</div>`
 
   box.innerHTML = `
@@ -191,9 +191,13 @@ async function unlinkWallet() {
 
 // ---------- loading ----------
 
+/** A load still in flight; the 5 s poll skips a tick rather than stack status-list reads on a slow Heka. */
+let loading = false
+
 /** Wallet and credentials together: a link made in the Trust Lens shows here within one poll. */
 async function load() {
-  if (busy) return
+  if (busy || loading) return
+  loading = true
 
   try {
     const [walletResponse, response] = await Promise.all([fetch('/api/wallet'), fetch('/api/credentials')])
@@ -212,6 +216,8 @@ async function load() {
   } catch (error) {
     el('load-error').hidden = false
     el('load-error').textContent = `Could not read the issuer state: ${error.message}`
+  } finally {
+    loading = false
   }
 }
 
@@ -336,4 +342,10 @@ document.querySelectorAll('.tab[data-view]').forEach((tab) => {
 })
 
 load()
-setInterval(load, 5000)
+// Nobody reads a hidden tab; each tick costs a status-list read at Heka.
+setInterval(() => {
+  if (!document.hidden) load()
+}, 5000)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) load()
+})

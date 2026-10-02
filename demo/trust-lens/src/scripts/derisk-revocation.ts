@@ -1,10 +1,10 @@
 /**
- * Phase 0.2 de-risking script — proves the whole credential lifecycle the demo depends on:
+ * De-risking script — proves the whole credential lifecycle the demo depends on:
  *
  *   1. create a did:hedera identity (anchored on Hedera testnet)
  *   2. register it as an OID4VC issuer with the Resource Passport credential config
  *   3. create a Bitstring Status List owned by that issuer
- *   4. create an issuance offer whose payload carries our app-layer `credentialStatus` claim (D7)
+ *   4. create an issuance offer whose payload carries our app-layer `credentialStatus` claim (spec/ADR-001)
  *   5. read the status list publicly and confirm the credential reads as NOT revoked
  *   6. revoke that index and confirm the public status list now reads as REVOKED
  *

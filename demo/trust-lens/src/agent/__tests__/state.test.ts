@@ -155,6 +155,28 @@ describe('AgentState authorizations', () => {
   })
 })
 
+describe('AgentState lifecycle', () => {
+  it('closes a pending authorization when its task is cancelled', () => {
+    const state = new AgentState()
+    requested(state)
+    state.cancelPendingAuthorization('t1')
+
+    expect(state.isDecided('sess-1')).toBe(true)
+    expect(state.authorizations.get('sess-1')).toMatchObject({ outcome: 'denied', reason: 'task cancelled' })
+  })
+
+  it('records a presentation that arrives after the decision as ignored, without a verifiedAt', () => {
+    const state = new AgentState()
+    requested(state)
+    state.authorizationDecided({ sessionId: 'sess-1', outcome: 'denied', reason: NO_PRESENTATION_IN_TIME })
+    state.sessionState('sess-1', 'ResponseVerified')
+
+    expect(state.authorizations.get('sess-1')?.verifiedAt).toBeUndefined()
+    expect(state.journal.list()[0].text).toMatch(/after the agent stopped waiting/)
+    expect(types(state)).not.toContain('auth.verified')
+  })
+})
+
 describe('AgentState channel', () => {
   it('counts reconnects, keeps the last error until the channel reopens, and journals open/closed', () => {
     const state = new AgentState()
@@ -175,6 +197,20 @@ describe('AgentState channel', () => {
     expect(state.channel.lastError).toBeUndefined()
     expect(types(state)).toEqual(['channel.open', 'channel.closed', 'channel.open'])
     expect(state.journal.list()[1].text).toBe('notification channel closed (code 1006)')
+  })
+
+  it('journals one close per outage, not one per failed reconnect', () => {
+    const state = new AgentState()
+    state.channelState('open')
+    for (let attempt = 0; attempt < 5; attempt++) {
+      state.channelState('closed', 'code 1006')
+      state.channelState('connecting')
+    }
+    expect(types(state).filter((type) => type === 'channel.closed')).toHaveLength(1)
+
+    state.channelState('open')
+    state.channelState('closed', 'code 1006')
+    expect(types(state).filter((type) => type === 'channel.closed')).toHaveLength(2)
   })
 
   it('journals an LLM fallback against the task', () => {

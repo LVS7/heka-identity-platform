@@ -12,8 +12,8 @@ during development — none of it is speculative.
 | Acme Invoice Agent    | 10003 (A2A + server view) | A2A path                |
 | Authorization Server  | 4300                      | MCP path                |
 | MCP server            | 4400                      | MCP path                |
-| Trust Lens            | 4000 (+4010 DIDComm)      | the UI                  |
-| TrustCo Console       | 4100 (+4110 DIDComm)      | revocation, offers      |
+| Trust Lens            | 4000                      | the UI                  |
+| TrustCo Console       | 4100                      | revocation, offers      |
 
 Start order matters in one place: **the Identity Service must be up and healthy before `yarn
 seed`**, and before the agent or AS start (both call `prepare-wallet` at boot).

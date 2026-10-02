@@ -12,13 +12,14 @@
 import express from 'express'
 
 import { AuditLog } from '../core/audit'
-import { AiCatalogEntry, Verdict } from '../core/types'
+import { AiCatalogEntry, Verdict, VerificationResult } from '../core/types'
 import { VerifierOptions, verifyEntry } from '../core/verify'
 import { WalletLink } from '../shared/wallet-link'
 import { ChatSession } from './chat'
 import { createLlm, LLM_NOT_CONFIGURED, LlmConfig } from './llm'
-import { AuthorizationDeniedError, McpConnection } from './mcp-client'
+import { AuthorizationDeniedError, AuthorizationUnavailableError, McpConnection } from './mcp-client'
 import { PendingAuthorization } from './oauth-provider'
+import { AuthorizationView, toAuthorizationState } from './presentation'
 import { TaskTracker } from './tasks'
 import { deliverToWallet } from './wallet-delivery'
 
@@ -38,24 +39,29 @@ export interface McpPathDeps {
   mcp: McpConnection
   tasks: TaskTracker
   walletLink: WalletLink
-  /** The catalog entries as served right now, with the domain each came from. */
-  discover(): Promise<Array<{ entry: AiCatalogEntry; servingDomain: string }>>
+  /** One publisher's catalog entries as served right now, with the domain each came from. */
+  discover(domain: string): Promise<{ results: Array<{ entry: AiCatalogEntry; servingDomain: string }> }>
   verifierOptions(): Promise<VerifierOptions>
   /** `${MCP_PUBLIC_URL}` — the fallback when a verified card carries no transport URL. */
   envMcpUrl: string
 }
 
-/** The step-up as the UI and the audit see it — one shape for /api/mcp/call and the chat. */
-export function authorizationView(pending: PendingAuthorization) {
+/**
+ * The step-up as the UI sees it: the same AuthorizationView an A2A task carries (./presentation.ts),
+ * so the browser renders both paths from one shape, plus what the AS said and the scope it is for.
+ */
+export function authorizationView(
+  pending: PendingAuthorization
+): AuthorizationView & { message?: string; scope: string } {
   return {
     request: pending.authorizationRequest,
+    sessionId: pending.session?.id,
+    state: toAuthorizationState(pending.session?.state ?? 'RequestCreated'),
+    requested: pending.requested,
+    delivery: pending.delivery,
+    source: pending.source,
     message: pending.message,
     scope: pending.scope,
-    resource: pending.resource,
-    session: pending.session,
-    requested: pending.requested,
-    source: pending.source,
-    delivery: pending.delivery,
   }
 }
 
@@ -70,6 +76,8 @@ export class McpPath {
   /** Bring the model up when a key is configured; the chat reports why it is not, otherwise. */
   public async startChat(config: LlmConfig | undefined): Promise<void> {
     if (!config) return
+    // Genkit loads for a few seconds; until then the chat must not claim the key is missing.
+    this.chatUnavailable = 'starting the model…'
     try {
       const llm = await createLlm(config)
       this.chat = new ChatSession(
@@ -122,23 +130,27 @@ export class McpPath {
       return { ok: false, verdict: 'NOT_ENGAGED', auditId: refusal.id, reason: NOT_ENGAGED }
     }
 
-    let target: { entry: AiCatalogEntry; servingDomain: string } | undefined
+    let result: VerificationResult | undefined
     try {
-      target = (await this.deps.discover()).find((item) => item.entry.identifier === engagement.identifier)
-    } catch {
-      target = undefined
+      // Only the engaged publisher's catalog: the entry is re-fetched from where it was engaged.
+      const { results } = await this.deps.discover(engagement.servingDomain)
+      const target = results.find((item) => item.entry.identifier === engagement.identifier)
+      if (target) {
+        result = await verifyEntry(
+          target.entry,
+          { servingDomain: target.servingDomain },
+          await this.deps.verifierOptions()
+        )
+      }
+    } catch (error) {
+      console.warn(`[web] the gate could not re-verify: ${(error as Error).message}`)
     }
-    if (!target) {
-      const reason = 'the engaged entry could not be re-fetched from its publisher'
+    if (!result) {
+      const reason = 'the engaged entry could not be re-fetched from its publisher and re-verified'
       const refusal = audit.record('engagement_refused', engagement.identifier, 'UNAVAILABLE', { reason, ...context })
       return { ok: false, verdict: 'UNAVAILABLE', auditId: refusal.id, reason }
     }
 
-    const result = await verifyEntry(
-      target.entry,
-      { servingDomain: target.servingDomain },
-      await this.deps.verifierOptions()
-    )
     if (result.verdict === Verdict.Verified) return { ok: true, verdict: 'VERIFIED', verifiedAt: result.verifiedAt }
 
     const verification = audit.record('verification', engagement.displayName, result.verdict, result.evidence)
@@ -177,15 +189,15 @@ export class McpPath {
       const tool = String(req.body?.tool ?? '')
       const args = (req.body?.args ?? {}) as Record<string, unknown>
 
-      const gate = await this.gate({ tool, via: 'direct call' })
-      if (!gate.ok) {
-        res
-          .status(403)
-          .json({ error: 'refused: not verified', verdict: gate.verdict, reason: gate.reason, auditId: gate.auditId })
-        return
-      }
-
       try {
+        const gate = await this.gate({ tool, via: 'direct call' })
+        if (!gate.ok) {
+          res
+            .status(403)
+            .json({ error: 'refused: not verified', verdict: gate.verdict, reason: gate.reason, auditId: gate.auditId })
+          return
+        }
+
         const outcome = await mcp.callTool(tool, args)
 
         if (outcome.ok) {
@@ -205,11 +217,12 @@ export class McpPath {
           return
         }
 
-        // The server refused and named a scope: the SDK has started a step-up the operator can satisfy.
+        // The server named a scope it wants: a challenge, not a refusal — the SDK has started a
+        // step-up the operator can satisfy, and only its outcome is a decision.
         audit.record(
-          'denial',
+          'authorization',
           `MCP · ${tool}`,
-          `refused: ${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'}`,
+          `step-up required (${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'})`,
           { via: 'direct call', requiredScope: outcome.requiredScope }
         )
         res.json({
@@ -299,13 +312,34 @@ export class McpPath {
           delivery: pending.delivery,
           session: poll.session,
           presentation: poll.presentation,
+          authorization: authorizationView(pending),
         })
       } catch (error) {
         const message = (error as Error).message
-        const presentation = error instanceof AuthorizationDeniedError ? error.presentation : undefined
-        audit.record('denial', `MCP · ${pending.scope}`, message, presentation ? { presentation } : undefined)
+        // The AS or Heka is down: nothing was decided, the step-up stays pending and the UI keeps
+        // polling. Recorded once per step-up, as what it is — not as a refusal of anyone.
+        if (error instanceof AuthorizationUnavailableError) {
+          if (!pending.unavailableAudited) {
+            pending.unavailableAudited = true
+            audit.record('engagement_refused', `MCP · ${pending.scope}`, 'UNAVAILABLE', {
+              reason: message,
+              note: 'the step-up stays pending; polling continues',
+            })
+          }
+          res.status(503).json({ error: message, retrying: true })
+          return
+        }
+        if (error instanceof AuthorizationDeniedError) {
+          const { presentation } = error
+          audit.record('denial', `MCP · ${pending.scope}`, message, presentation ? { presentation } : undefined)
+          this.onDecision()
+          res.status(403).json({ error: message, presentation })
+          return
+        }
+        // The AS lost the request, or the code exchange failed: over, but nobody refused a credential.
+        audit.record('engagement_refused', `MCP · ${pending.scope}`, 'UNAVAILABLE', { reason: message })
         this.onDecision()
-        res.status(403).json({ error: message, presentation })
+        res.status(410).json({ error: message })
       }
     })
 
@@ -394,7 +428,7 @@ export class McpPath {
     })
   }
 
-  /** A step-up was decided: a chat paused on it continues on its own (the UI's resume call is then a no-op). */
+  /** A step-up is over, decided or not: a chat paused on it continues on its own. */
   private onDecision(): void {
     if (this.chat?.state === 'paused-authorization') this.chat.resume()
   }

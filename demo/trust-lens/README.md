@@ -182,7 +182,7 @@ sequenceDiagram
 
 The resource server never sees a credential, a DID or a presentation — it validates a JWT, exactly as any OAuth 2.1 resource server would. The model never sees OAuth — it sees a tool that said "authorization required" and was later answered. That is the point: the composition needs no bespoke wire format, so an ordinary MCP client and an ordinary tool-calling model both work. The audience binding is what makes it safe — the token is useless at any other resource.
 
-The chat needs `OPENAI_API_KEY`; without it the MCP tab says `LLM not configured`, and the same step-up is exercised through the API with curl (`POST /api/mcp/call`, see the `demo-walkthrough` skill). The sensitive tool's description invites the call on purpose: the server's 401/403 limits access, not the model's restraint — told to "say so and wait", the model refused without ever calling the tool, and the step-up never happened. **Drop token** discards the cached token so the kill switch can be shown without a restart. The poll answers mirror the A2A extension's demo additions: `pending` carries `session { id, state }`, `granted` and a `403` denial carry `presentation`, and a second call while a step-up is pending joins it instead of starting another.
+The chat needs `OPENAI_API_KEY`; without it the MCP tab says `LLM not configured`, and the same step-up is exercised through the API with curl (`POST /api/mcp/call`, see the `demo-walkthrough` skill). The sensitive tool's description invites the call on purpose: the server's 401/403 limits access, not the model's restraint — told to "say so and wait", the model refused without ever calling the tool, and the step-up never happened. **Drop token** discards the cached token so the kill switch can be shown without a restart. The poll answers mirror the A2A extension's demo additions: `pending` carries `session { id, state }`, `granted` and a `403` denial carry `presentation`, and a second call while a step-up is pending joins it instead of starting another. The AS answers `403` only for a decision about the presented credential: Heka unreachable is `503` (the step-up stays pending and the panel says _Authorization server unavailable — retrying_), and a request the AS no longer knows (restarted, or abandoned for 10 minutes) is `404` and ends the step-up without a denial.
 
 ### Kill switches and audit
 
@@ -190,7 +190,7 @@ Both protocol paths converge on the same status-list check, so **one revocation 
 
 Revoking a single Resource Passport instead flips that one entry to `REVOKED` and leaves its neighbour usable — per-resource granularity, with no catalog republish and no registry involvement.
 
-Every trust decision — verification, refusal, authorization, denial — is recorded with the evidence behind it.
+Every trust decision — verification, refusal, authorization, denial — is recorded with the evidence behind it. The audit keeps people's decisions apart from outages: `denial` is a refused credential; an unreachable publisher, AS or agent is `engagement_refused · UNAVAILABLE`; a 401/403 challenge is `authorization · step-up required`, not a refusal.
 
 ## Running the Demo
 
@@ -247,10 +247,9 @@ Most values match the defaults of a local Heka Identity Service and can be kept 
 - `IDENTITY_SERVICE_ACCESS_TOKEN` — demo token with a very long validity; change it if the instance's JWT configuration differs
 - `HEDERA_OPERATOR_ID` / `HEDERA_OPERATOR_KEY` — default to the development operator committed in Heka Identity Service, so a local instance works out of the box. **Replace before anything real.**
 - `SITES_PORT` — keep `443`. The catalogs and cards written by `yarn seed` carry no port in their URLs, so any other value makes the digest-bound card fetch miss.
-- `ACME_AGENT_PUBLIC_URL` — the URL the agent advertises **inside its agent card**. An A2A client connects to that, not to the URL it was handed, so this is what decides reachability on Path B.
+- `ACME_AGENT_URL` — written by `yarn seed` into the **published, digest-pinned** agent card; the Trust Lens engages the agent at the URL in the card it has just verified, so on Path B it must name the agent's container. `ACME_AGENT_PUBLIC_URL` is the same URL in the agent's own live card (its server view and other A2A clients).
 - `AGENT_AUTH_TIMEOUT_MS` (default `180000`), `AS_TOKEN_TTL` (default `300`)
 - `HOLDER_PUBLIC_DID` — optional seed for the wallet link (the wallet's `Public DID`). Linking from either UI writes `.wallet-link.json`, which takes precedence. The QR and the simulated holder work without any link
-- `TRUST_LENS_DIDCOMM_PORT` (default `4010`), `TRUSTCO_CONSOLE_DIDCOMM_PORT` (default `4110`) — inbound DIDComm ports of the two processes that message the wallet
 
 ---
 
@@ -355,10 +354,10 @@ That must print `4.16.0`. If it prints the failure, fix `REPO` and delete the em
 
 ```bash
 docker run --rm $COMMON node:22-bookworm bash -lc "corepack yarn install"
-docker run --rm $COMMON node:22-bookworm bash -lc "${BRIDGE}MCP_PUBLIC_URL=http://trustlens-mcp:4400 corepack yarn seed"
+docker run --rm $COMMON node:22-bookworm bash -lc "${BRIDGE}MCP_PUBLIC_URL=http://trustlens-mcp:4400 ACME_AGENT_URL=http://trustlens-agent:10003/ corepack yarn seed"
 ```
 
-The seed needs the bridge: Heka mints credential offers pointing at `http://localhost:3003`, which inside a container is the container itself, and the seed claims those offers itself. It also needs `MCP_PUBLIC_URL`: the MCP card's `transport.url` is written at seed time and the Trust Lens connects to what the verified card says, so on Path B the card must name the container. See [A2](#a2-install-and-seed) for what seeding does and for `--check` / `--reset`.
+The seed needs the bridge: Heka mints credential offers pointing at `http://localhost:3003`, which inside a container is the container itself, and the seed claims those offers itself. It also needs `MCP_PUBLIC_URL` and `ACME_AGENT_URL`: the MCP card's `transport.url` and the agent card's `url` are written at seed time, and the Trust Lens connects to what the verified card says, so on Path B both cards must name the containers. A stand seeded for Path A needs `yarn seed --reset` with these set (the cards are digest-pinned). See [A2](#a2-install-and-seed) for what seeding does and for `--check` / `--reset`.
 
 ### B4. Start the six services
 
@@ -391,7 +390,7 @@ docker run -d --rm --name trustlens-console $COMMON -p 4100:4100 \
 
 The first start takes about a minute while each container installs socat and boots tsx. The web container needs egress to the LLM endpoint for the chat (`api.openai.com`, or whatever `OPENAI_BASE_URL` names); the `.env` in the mounted repo supplies the key.
 
-Two things carry over from the host setup without extra flags: the wallet link (`.wallet-link.json`, written by either UI) lives in the mounted repo directory, so the web and the console containers share it; and the DIDComm ports (`4010`, `4110`) need no `-p` — delivery to the wallet is outbound only. If Heka advertises your LAN address (see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), the `3003` half of the bridge becomes unnecessary; it does no harm.
+Two things carry over from the host setup without extra flags: the wallet link (`.wallet-link.json`, written by either UI) lives in the mounted repo directory, so the web and the console containers share it; and delivery to the wallet is outbound only, so nothing extra needs a `-p`. If Heka advertises your LAN address (see [Using the real Heka Wallet](#using-the-real-heka-wallet-optional)), the `3003` half of the bridge becomes unnecessary; it does no harm.
 
 `Conflict. The container name "/trustlens-…" is already in use` means that service is **already running** — check with `docker ps` before assuming anything is wrong. To restart one, remove it first: `docker rm -f trustlens-sites`.
 
@@ -437,7 +436,7 @@ Both paths land here. Open **http://localhost:4000** (Trust Lens), **http://loca
 
    The panel says what is asked and walks Requested → Wallet fetched → Verified → Status checked → Authorized as the person acts, with the agent's timeout counting down; the completed task shows a presentation card — claims, issuer, holder, status check, and how it was presented (a simulated holder is labelled) — with **Raw VP** for the compact token. The **Tasks** tab lists every engagement and reopens one; a pending task keeps running while you look elsewhere.
 
-   The same engagement seen from the other side: **http://localhost:10003** is the agent's server view — its identity (verifier `did:key`, resource `did:hedera`), the live agent card next to the digest-pinned one, every task with its status updates, every authorization with the session's progress, the status check and the decision, and a journal. **Forget authorizations** there clears the agent's memory of authorized contexts, so a reused context asks again — which is how to show a revocation biting a context that was authorized before it.
+   The same engagement seen from the other side: **http://localhost:10003** is the agent's server view — its identity (verifier `did:key`, resource `did:hedera`), the live agent card next to the digest-pinned one, every task with its status updates, every authorization with the session's progress, the status check and the decision, and a journal. The agent remembers a context it authorized: on a completed task, **Run again in this context** (in the Trust Lens task view) engages the same entry again — re-verified, as always — and the task completes without asking. Revoking the officer credential alone does **not** change that: the agent's memory of an authorized context has no expiry (unlike the AS's 5-minute token — see G5 in [REVOCATION-AUDIT](docs/REVOCATION-AUDIT.md)). **Forget authorizations** on the agent's page clears it, so the next **Run again** asks again — and with the credential revoked, is denied. That is how to show a revocation biting a context that was authorized before it.
 
    > Present promptly. The verification session expires after Credo's default window and the Heka API does not expose `expirationInSeconds` to lengthen it, so a slow tap fails with `session expired`. Nothing is corrupted — press **Resend to wallet** or engage again.
 

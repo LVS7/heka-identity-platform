@@ -50,16 +50,26 @@ function main() {
     next()
   })
 
+  // One static handler per site, built once rather than on every request.
+  const handlers = Object.fromEntries(
+    Object.entries(SITES).map(([domain, site]) => [
+      domain,
+      express.static(resolve(STATIC_ROOT, site), { dotfiles: 'allow', index: false }),
+    ])
+  )
+
   app.use((req, res, next) => {
-    const site = SITES[hostname(req.headers.host)]
-    if (!site) {
+    const host = hostname(req.headers.host)
+    // Own keys only: a Host of "constructor" would otherwise resolve through the prototype.
+    const handler = Object.hasOwn(handlers, host) ? handlers[host] : undefined
+    if (!handler) {
       res.status(404).json({
         error: 'unknown publisher',
         detail: `Host "${hostname(req.headers.host)}" is not one of: ${Object.keys(SITES).join(', ')}`,
       })
       return
     }
-    express.static(resolve(STATIC_ROOT, site), { dotfiles: 'allow', index: false })(req, res, next)
+    handler(req, res, next)
   })
 
   app.use((_req, res) => res.status(404).json({ error: 'not found' }))

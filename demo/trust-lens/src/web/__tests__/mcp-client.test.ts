@@ -6,7 +6,12 @@ import express from 'express'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createResourceServer } from '../../mcp/resource-server'
-import { AuthorizationDeniedError, McpConnection } from '../mcp-client'
+import {
+  AuthorizationDeniedError,
+  AuthorizationLostError,
+  AuthorizationUnavailableError,
+  McpConnection,
+} from '../mcp-client'
 import { TrustLensOAuthProvider } from '../oauth-provider'
 
 const REQUESTED = {
@@ -234,6 +239,42 @@ describe('McpConnection', () => {
       pending: { requestId: 'req-2' },
     })
     expect(as.authorizeCalls).toHaveLength(2)
+  })
+
+  it('keeps the step-up pending when the AS is unavailable', async () => {
+    const { mcp } = await stack([[503, { error: 'temporarily_unavailable', error_description: 'heka down' }]])
+    await mcp.callTool('suppliers-export-bank-details')
+
+    await expect(mcp.pollAuthorization()).rejects.toBeInstanceOf(AuthorizationUnavailableError)
+    expect(mcp.pending).toBeDefined()
+    expect(mcp.lastDecision).toBeUndefined()
+    expect(await mcp.pollAuthorization()).toMatchObject({ granted: false })
+  })
+
+  it('ends the step-up without a denial when the AS no longer knows the request', async () => {
+    const { mcp } = await stack([
+      [404, { error: 'invalid_request', error_description: 'unknown authorization request' }],
+    ])
+    await mcp.callTool('suppliers-export-bank-details')
+
+    await expect(mcp.pollAuthorization()).rejects.toBeInstanceOf(AuthorizationLostError)
+    expect(mcp.pending).toBeUndefined()
+    expect(mcp.lastDecision).toMatchObject({
+      granted: false,
+      incomplete: true,
+      reason: 'unknown authorization request',
+    })
+  })
+
+  it('labels a refused presentation without a vp_token as unknown, not as a scan', async () => {
+    const denied = { sessionId: 'sess-1', outcome: 'denied' as const, reason: 'no trusted issuer' }
+    const { mcp } = await stack([
+      [403, { error: 'access_denied', error_description: 'no trusted issuer', presentation: denied }],
+    ])
+    await mcp.callTool('suppliers-export-bank-details')
+
+    const error = await mcp.pollAuthorization().catch((e: unknown) => e)
+    expect((error as AuthorizationDeniedError).presentation?.source).toBe('unknown')
   })
 
   it('refuses to poll when nothing is pending', async () => {

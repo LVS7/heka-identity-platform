@@ -1,5 +1,5 @@
 /**
- * Phase 1 de-risking: can we capture the signed bytes of a credential Heka only offers
+ * De-risking: can we capture the signed bytes of a credential Heka only offers
  * through OID4VCI? Resource Passports must be hosted as static files, so this must work.
  *
  * Run: yarn derisk:holder

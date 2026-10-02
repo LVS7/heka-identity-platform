@@ -2,7 +2,7 @@
  * Core types for the Trust Lens verification engine.
  *
  * Catalog / entry shapes follow the ARD "AI Catalog" data model (pinned snapshot in ../../spec).
- * The VC Attestation Profile fields follow §4.4 of the demo design document.
+ * The VC Attestation Profile fields follow spec/ADR-001 (a proposed profile, pinned there).
  */
 
 // ---------- AI Catalog (ARD) ----------
@@ -64,7 +64,7 @@ export interface ResourcePassportClaims {
     kyb_ref?: string
   }
   capabilities?: string[]
-  /** App-layer status binding (design decision D7): W3C Bitstring Status List pointer */
+  /** App-layer status binding (spec/ADR-001): W3C Bitstring Status List pointer */
   credentialStatus?: CredentialStatusClaim
 }
 

@@ -4,9 +4,9 @@
  *
  * A manual tool loop (`returnToolRequests`): every request the model makes comes back here, so
  * each one goes through the per-call gate and the MCP client, and a 401/403 pauses the loop with
- * the conversation kept until the step-up is decided. The model never retries on its own: a
- * 401/403 pauses the loop and only resume() continues it. One conversation per process; the UI
- * polls.
+ * the conversation kept until the step-up is decided. A 401/403 pauses the loop and only resume()
+ * continues it; after a denial the model may ask again, which MAX_TOOL_TURNS bounds. One
+ * conversation per process; the UI polls.
  *
  * The prompt tells the model to call tools that need authorization and let the server decide.
  * "Say so and wait" made it refuse without calling (0/5 with gpt-4o-mini), so the step-up — the
@@ -81,6 +81,8 @@ interface ToolTurn {
   toolTurns: number
   /** The step of the request at `index`, when it already exists (a paused call being retried). */
   step?: ChatToolStep
+  /** Length of the history before the model's tool-request message: a failed turn is cut back to it. */
+  historyMark: number
 }
 
 const now = () => new Date().toISOString()
@@ -91,6 +93,8 @@ export class ChatSession {
   private current: ChatState = 'idle'
   private failure?: string
   private paused?: ToolTurn
+  /** The turn whose tool calls are not answered yet — the one a failure has to undo. */
+  private openTurn?: ToolTurn
   /** Bumped by reset(): a loop still running for the old conversation abandons its work. */
   private generation = 0
   private loop: Promise<void> = Promise.resolve()
@@ -148,13 +152,12 @@ export class ChatSession {
     if (!this.mcp.tokenStatus.present) {
       const reason =
         decision && !decision.granted ? (decision.reason ?? 'authorization denied') : 'no token was obtained'
-      turn.step.status = 'denied'
-      turn.step.summary = `denied: ${reason}`
-      this.audit.record('denial', `MCP · ${turn.step.name}`, reason, {
-        via: 'LLM chat',
-        presentation: decision?.presentation,
-      })
-      turn.responses.push(this.toolResponse(turn.requests[turn.index], { error: `authorization denied: ${reason}` }))
+      // A lost request or a failed exchange is not a refusal; the model must not be told it was denied.
+      const outcome = decision?.incomplete ? 'authorization did not complete' : 'authorization denied'
+      turn.step.status = decision?.incomplete ? 'error' : 'denied'
+      turn.step.summary = decision?.incomplete ? `${outcome}: ${reason}` : `denied: ${reason}`
+      // Not audited here: the route that ended the step-up recorded the outcome.
+      turn.responses.push(this.toolResponse(turn.requests[turn.index], { error: `${outcome}: ${reason}` }))
       turn.index++
       turn.step = undefined
     }
@@ -171,6 +174,7 @@ export class ChatSession {
     this.current = 'idle'
     this.failure = undefined
     this.paused = undefined
+    this.openTurn = undefined
   }
 
   private async run(generation: number, resumed?: ToolTurn): Promise<void> {
@@ -198,6 +202,7 @@ export class ChatSession {
           })),
         })
         if (generation !== this.generation) return
+        const historyMark = this.messages.length
         this.messages.push(reply.message)
 
         if (!reply.toolRequests.length) {
@@ -206,10 +211,12 @@ export class ChatSession {
           return
         }
         if (++toolTurns > MAX_TOOL_TURNS) {
+          this.messages.length = historyMark
           this.fail('too many tool turns')
           return
         }
-        turn = { tools, requests: reply.toolRequests, index: 0, responses: [], toolTurns }
+        turn = { tools, requests: reply.toolRequests, index: 0, responses: [], toolTurns, historyMark }
+        this.openTurn = turn
       }
     } catch (error) {
       if (generation === this.generation) this.fail((error as Error).message)
@@ -242,6 +249,7 @@ export class ChatSession {
       turn.responses.push(this.toolResponse(request, output))
     }
     this.messages.push({ role: 'tool', content: turn.responses })
+    this.openTurn = undefined
     return 'done'
   }
 
@@ -280,10 +288,11 @@ export class ChatSession {
 
     step.status = 'paused'
     step.summary = 'authorization required'
+    // A challenge, not a refusal: only the step-up's outcome is a decision.
     this.audit.record(
-      'denial',
+      'authorization',
       `MCP · ${step.name}`,
-      `refused: ${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'}`,
+      `step-up required (${outcome.status === 403 ? 'insufficient scope' : 'unauthorized'})`,
       { via: 'LLM chat', requiredScope: outcome.requiredScope }
     )
     return 'paused'
@@ -293,7 +302,21 @@ export class ChatSession {
     return { toolResponse: { name: request.name, ref: request.ref, output } }
   }
 
+  /**
+   * A model turn whose tool calls go unanswered makes every later request invalid (OpenAI answers
+   * 400 until the history is cleared), so a failure cuts the history back to before that turn. The
+   * person's question stays; the next message is asked against a consistent history.
+   */
   private fail(message: string): void {
+    if (this.openTurn) this.messages.length = this.openTurn.historyMark
+    this.openTurn = undefined
+    // The call that was running when the turn failed did not finish; its step must not say "running…" forever.
+    for (const step of this.steps) {
+      if (step.tool?.status === 'running') {
+        step.tool.status = 'error'
+        step.tool.summary = message
+      }
+    }
     this.current = 'error'
     this.failure = message
     this.paused = undefined

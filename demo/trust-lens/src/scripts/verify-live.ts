@@ -1,5 +1,5 @@
 /**
- * Run the verification engine against the live publisher sites — the M1 acceptance check.
+ * Run the verification engine against the live publisher sites — the end-to-end acceptance check.
  *
  * Expects `yarn seed` to have run and `yarn sites` to be serving. Prints one verdict per
  * discovered entry, exactly as the Trust Lens UI will.
@@ -68,7 +68,9 @@ async function main() {
         console.log(`  ${badge}  ${entry.displayName}`)
         if (result.verdict === Verdict.Verified) {
           verified++
-          console.log(`                    operator: ${result.evidence.operatorLegalName} (${result.evidence.operatorDomain})`)
+          console.log(
+            `                    operator: ${result.evidence.operatorLegalName} (${result.evidence.operatorDomain})`
+          )
         } else {
           refused++
           console.log(`                    ${result.evidence.failureDetail}`)

@@ -108,6 +108,14 @@ main {
   margin: 0 auto;
 }
 
+/* A request that failed, said once under the header instead of a click that silently did nothing. */
+.page-error {
+  max-width: 1080px;
+  margin: 12px auto 0;
+  padding: 0 28px;
+  box-sizing: border-box;
+}
+
 .view {
   display: none;
 }
@@ -438,8 +446,13 @@ code {
   line-height: 1.6;
 }
 
-#task-back {
+#task-back,
+#task-again {
   margin-bottom: 16px;
+}
+
+#task-again {
+  margin-left: 8px;
 }
 
 .timeline {
@@ -973,7 +986,8 @@ code {
 
 .connection:empty,
 .tools-line:empty,
-.token-note:empty {
+.token-note:empty,
+#mcp-auth-unavailable:empty {
   display: none;
 }
 

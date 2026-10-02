@@ -20,45 +20,61 @@ import { OFFICER_CREDENTIAL } from './demo-config'
 import { claimCredentialOffer, createHolderAgent, HolderAgent, storeCredential } from './holder'
 import { IdentityServiceClient } from './identity-service'
 import { createOfficerOffer } from './officer-offer'
-import { loadState } from '../seed/state'
+import { loadState, seedFingerprint } from '../seed/state'
 
 dotenv.config()
 
 export class SimulatedWallet {
   private agent: HolderAgent | undefined
-  private holdsCredential = false
+  /** Memoized: two first presentations at once (A2A and MCP) wait for one start instead of racing two. */
+  private ready: Promise<HolderAgent> | undefined
+  /** The seed the held credential was minted from (`seedFingerprint`). */
+  private mintedFor: string | undefined
 
   public constructor(private readonly identityService: IdentityServiceClient) {}
 
   /**
-   * Bring up the holder and put a Finance Data Officer credential in it.
-   *
+   * Bring up the holder and put a Finance Data Officer credential in it. A failed start is
+   * forgotten, so the next presentation tries again rather than failing for good.
+   */
+  public initialize(): Promise<HolderAgent> {
+    this.ready ??= this.start().catch(async (error: unknown) => {
+      await this.shutdown()
+      throw error
+    })
+    return this.ready
+  }
+
+  /**
    * A fresh offer is minted rather than reusing the one `yarn seed` printed: that one is for
    * the phone, and a pre-authorized code is single-use.
    */
-  public async initialize(): Promise<void> {
-    if (this.agent) return
-
+  private async start(): Promise<HolderAgent> {
     const state = loadState()
     if (!state.issuerDid || state.statusIndexes.officer === undefined || !state.statusListId) {
       throw new Error('no seed state — run `yarn seed` first')
     }
 
-    this.agent = createHolderAgent('trust-lens-simulated-wallet')
-    await this.agent.initialize()
+    const agent = createHolderAgent('trust-lens-simulated-wallet')
+    this.agent = agent
+    await agent.initialize()
 
     const credentialOffer = await createOfficerOffer(this.identityService, state)
-
-    const compact = await claimCredentialOffer(this.agent, credentialOffer)
-    await storeCredential(this.agent, compact)
-    this.holdsCredential = true
+    const compact = await claimCredentialOffer(agent, credentialOffer)
+    await storeCredential(agent, compact)
+    this.mintedFor = seedFingerprint(state)
     console.log(`[wallet] simulated holder ready, holding a ${OFFICER_CREDENTIAL.role} credential`)
+    return agent
   }
 
   /** Resolve an OID4VP request and present the officer credential against it. */
   public async present(authorizationRequest: string): Promise<void> {
-    if (!this.agent || !this.holdsCredential) await this.initialize()
-    const agent = this.agent as HolderAgent
+    // After `yarn seed --reset` the held credential names an issuer nobody trusts any more.
+    if (this.mintedFor && this.mintedFor !== seedFingerprint(loadState())) {
+      console.log('[wallet] the seed changed since the credential was minted; minting a fresh one')
+      await this.shutdown()
+    }
+    const agent = await this.initialize()
 
     const resolved = (await agent.openid4vc.holder.resolveOpenId4VpAuthorizationRequest(authorizationRequest)) as {
       presentationExchange?: { credentialsForRequest?: PexRequirements }
@@ -92,9 +108,11 @@ export class SimulatedWallet {
   }
 
   public async shutdown(): Promise<void> {
-    await this.agent?.shutdown()
+    const agent = this.agent
     this.agent = undefined
-    this.holdsCredential = false
+    this.ready = undefined
+    this.mintedFor = undefined
+    await agent?.shutdown().catch(() => undefined)
   }
 }
 

@@ -1,7 +1,7 @@
 /**
  * The verification engine — the part of the demo that actually decides trust.
  *
- * Procedure (design §4.4), in order, short-circuiting on the first failure:
+ * Procedure (docs/ARCHITECTURE.md, Verification procedure), in order, short-circuiting on the first failure:
  *
  *   1. the URN's publisher FQDN must equal the domain the catalog was served from
  *   2. resolve trustManifest.identity (did:hedera)

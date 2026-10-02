@@ -12,7 +12,9 @@ import { DeliveryState } from './wallet-delivery'
 
 export type PresentationSource = 'wallet' | 'qr' | 'simulated' | 'unknown'
 
-export type AuthorizationState = 'requested' | 'wallet-fetched' | 'verified' | 'authorized' | 'denied' | 'expired'
+/** `failed`: the exchange ended without a decision — the agent errored, nobody refused a credential. */
+export type AuthorizationState =
+  'requested' | 'wallet-fetched' | 'verified' | 'authorized' | 'denied' | 'expired' | 'failed'
 
 export interface AuthorizationView {
   /** The openid4vp:// URI — what the QR encodes and what is pushed to the wallet. */

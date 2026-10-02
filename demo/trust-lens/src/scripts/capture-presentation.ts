@@ -13,9 +13,8 @@ import { dirname, resolve } from 'node:path'
 
 import * as dotenv from 'dotenv'
 
-import { ROLE_CREDENTIAL_VCT } from '../core/types'
-import { OFFICER_CREDENTIAL } from '../shared/demo-config'
 import { identityServiceFromEnv } from '../shared/identity-service'
+import { officerPresentationDefinition } from '../shared/presented-credential'
 import { SimulatedWallet } from '../shared/simulated-wallet'
 
 dotenv.config()
@@ -23,25 +22,9 @@ dotenv.config()
 const FIXTURE = resolve(process.cwd(), 'src/core/__tests__/fixtures/officer-presentation.sd-jwt')
 
 /** The same request the agent makes: role and org, nothing else. */
-const OFFICER_PRESENTATION_DEFINITION = {
-  id: 'FinanceDataOfficer',
-  name: 'Finance Data Officer',
-  purpose: 'Capture a presentation fixture for the decoder tests',
-  input_descriptors: [
-    {
-      id: 'FinanceDataOfficer',
-      name: 'Finance Data Officer credential',
-      constraints: {
-        limit_disclosure: 'required',
-        fields: [
-          { path: ['$.vct'], filter: { type: 'string', enum: [ROLE_CREDENTIAL_VCT] } },
-          { path: ['$.role'], filter: { type: 'string', enum: [OFFICER_CREDENTIAL.role] } },
-          { path: ['$.org'], filter: { type: 'string' } },
-        ],
-      },
-    },
-  ],
-}
+const OFFICER_PRESENTATION_DEFINITION = officerPresentationDefinition(
+  'Capture a presentation fixture for the decoder tests'
+)
 
 async function main() {
   const identityService = identityServiceFromEnv()

@@ -9,7 +9,7 @@
  */
 
 import { A2AClient } from '@a2a-js/sdk/client'
-import { Message, MessageSendParams, Task, TaskStatusUpdateEvent } from '@a2a-js/sdk'
+import { AgentCard, Message, MessageSendParams, Task, TaskStatusUpdateEvent } from '@a2a-js/sdk'
 import { randomUUID } from 'node:crypto'
 
 import { AuditLog } from '../core/audit'
@@ -28,6 +28,9 @@ export interface TaskEvent {
 
 export interface TrackedTask {
   id: string
+  /** The catalog entry it was engaged from — what "Run again in this context" engages again. */
+  identifier: string
+  publisher: string
   resource: string
   state: string
   startedAt: string
@@ -44,7 +47,7 @@ export interface TrackedTask {
   error?: string
 }
 
-const FINAL_STATES = ['authorized', 'denied', 'expired']
+const FINAL_STATES = ['authorized', 'denied', 'expired', 'failed']
 
 function extensionMetadata(update: TaskStatusUpdateEvent): InTaskOpenId4VpMessageMetadata | undefined {
   return update.status.message?.metadata?.[IN_TASK_OID4VP_EXTENSION_URI] as InTaskOpenId4VpMessageMetadata | undefined
@@ -90,8 +93,9 @@ export function applyStatusUpdate(task: TrackedTask, update: TaskStatusUpdateEve
 
   if (update.status.state === 'failed') {
     task.error = text
+    // Denied or expired only with the agent's result; without one the agent failed, and nobody refused anything.
     if (task.authorization) {
-      task.authorization.state = result?.reason === NO_PRESENTATION_IN_TIME ? 'expired' : 'denied'
+      task.authorization.state = !result ? 'failed' : result.reason === NO_PRESENTATION_IN_TIME ? 'expired' : 'denied'
     }
     if (result) task.presentation = presentationFrom(result, sourceOf(task.authorization, result))
   }
@@ -99,15 +103,27 @@ export function applyStatusUpdate(task: TrackedTask, update: TaskStatusUpdateEve
   return { text }
 }
 
+/** What the tracker needs from an A2A client — the SDK's, or a stand-in in tests. */
+type A2AStreamClient = Pick<A2AClient, 'sendMessageStream'>
+
+export interface TaskTrackerOptions {
+  /** The agent's URL from the environment; used only when the verified card is not at hand. */
+  agentUrl: string
+  client?: (card: AgentCard | string) => A2AStreamClient
+}
+
 export class TaskTracker {
   private readonly tasks = new Map<string, TrackedTask>()
   private wallet: SimulatedWallet | undefined
+  private readonly client: (card: AgentCard | string) => A2AStreamClient
 
   public constructor(
-    private readonly agentUrl: string,
     private readonly audit: AuditLog,
-    private readonly identityService: IdentityServiceClient
-  ) {}
+    private readonly identityService: IdentityServiceClient,
+    private readonly options: TaskTrackerOptions
+  ) {
+    this.client = options.client ?? ((card) => new A2AClient(card))
+  }
 
   public get(id: string): TrackedTask | undefined {
     return this.tasks.get(id)
@@ -125,11 +141,23 @@ export class TaskTracker {
     return Boolean(task?.authorization && !FINAL_STATES.includes(task.authorization.state))
   }
 
-  public async start(resource: string, prompt: string, preflight?: TrackedTask['preflight']): Promise<TrackedTask> {
-    const client = new A2AClient(this.agentUrl)
+  /**
+   * Start a task with the agent. `target.card` is the card that was just verified: the client talks
+   * to the URL in those bytes rather than fetching the agent's live, unattested card again.
+   * `contextId` continues an earlier conversation, which the agent may have authorized already.
+   */
+  public async start(
+    target: { identifier: string; publisher: string; resource: string; card?: AgentCard },
+    prompt: string,
+    preflight?: TrackedTask['preflight'],
+    contextId?: string
+  ): Promise<TrackedTask> {
+    const client = this.client(target.card ?? this.options.agentUrl)
     const task: TrackedTask = {
       id: randomUUID(),
-      resource,
+      identifier: target.identifier,
+      publisher: target.publisher,
+      resource: target.resource,
       state: 'submitted',
       startedAt: new Date().toISOString(),
       events: [],
@@ -142,6 +170,7 @@ export class TaskTracker {
       kind: 'message',
       role: 'user',
       parts: [{ kind: 'text', text: prompt }],
+      ...(contextId ? { contextId } : {}),
     }
 
     // Consume the stream in the background; the UI polls this task.
@@ -149,7 +178,7 @@ export class TaskTracker {
     return task
   }
 
-  private async consume(client: A2AClient, params: MessageSendParams, task: TrackedTask): Promise<void> {
+  private async consume(client: A2AStreamClient, params: MessageSendParams, task: TrackedTask): Promise<void> {
     try {
       for await (const event of client.sendMessageStream(params)) {
         if (event.kind === 'task') {
@@ -174,27 +203,41 @@ export class TaskTracker {
 
         // The presentation is the evidence: it goes into the audit with the decision it settled.
         if (state === 'completed') {
-          this.audit.record(
-            'authorization',
-            task.resource,
-            'task completed after verified presentation',
-            task.presentation ? { presentation: task.presentation } : undefined
-          )
+          if (task.authorization) {
+            this.audit.record(
+              'authorization',
+              task.resource,
+              'task completed after verified presentation',
+              task.presentation ? { presentation: task.presentation } : undefined
+            )
+          } else {
+            // Nothing was presented in this task: the agent had authorized its context before.
+            this.audit.record('authorization', task.resource, 'task completed in a context authorized earlier', {
+              contextId: task.a2a?.contextId,
+            })
+          }
         }
 
         if (state === 'failed') {
-          this.audit.record(
-            'denial',
-            task.resource,
-            text ?? 'task failed',
-            task.presentation ? { presentation: task.presentation } : undefined
-          )
+          // A refused or expired presentation is a decision; anything else is the agent failing.
+          const decided = task.authorization?.state === 'denied' || task.authorization?.state === 'expired'
+          if (decided) {
+            this.audit.record(
+              'denial',
+              task.resource,
+              text ?? 'task failed',
+              task.presentation ? { presentation: task.presentation } : undefined
+            )
+          } else {
+            this.audit.record('engagement_refused', task.resource, 'UNAVAILABLE', { reason: text ?? 'task failed' })
+          }
         }
       }
     } catch (error) {
       task.state = 'failed'
       task.error = (error as Error).message
-      this.audit.record('denial', task.resource, task.error)
+      // The stream broke (the agent went down or restarted): nobody decided anything about a credential.
+      this.audit.record('engagement_refused', task.resource, 'UNAVAILABLE', { reason: task.error })
     }
   }
 
@@ -217,8 +260,8 @@ export class TaskTracker {
 
   /** Present the officer credential against any OID4VP request — the agent's or the AS's. */
   public async presentToAuthorizationServer(authorizationRequest: string): Promise<void> {
-    if (!this.wallet) this.wallet = new SimulatedWallet(this.identityService)
-    await this.wallet.initialize()
+    this.wallet ??= new SimulatedWallet(this.identityService)
+    // `present` brings the holder up, and re-mints its credential if the seed changed since.
     await this.wallet.present(authorizationRequest)
   }
 

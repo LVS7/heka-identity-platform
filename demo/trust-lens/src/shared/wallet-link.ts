@@ -15,10 +15,9 @@
  *   already in state `Completed` with `theirDid` set to the wallet's public DID. The wallet side
  *   carries a patch that accepts basic messages from unknown connections.
  * - The wallet never answers us. It posts the presentation straight to Heka; the relying party
- *   learns the outcome from Heka. So delivery is fire-and-forget, and an inbound transport is not
- *   strictly needed: a `did:key` sender has no endpoint, and Credo then marks the message
- *   `return_route: all` by itself. The inbound HTTP transport is kept to mirror the proven
- *   reference configuration; it can be dropped once the DIDComm path has been exercised end to end.
+ *   learns the outcome from Heka. So delivery is fire-and-forget and needs no inbound transport: a
+ *   `did:key` sender has no endpoint, and Credo then marks the message `return_route: all` by
+ *   itself (see `wallet-link-credo.ts`).
  *
  * Credo 0.7 only delivers to `did-communication` / `IndyAgent` services and silently drops the
  * DIDComm v2 `DIDCommMessaging` type, which fails much later as an opaque "undeliverable". The

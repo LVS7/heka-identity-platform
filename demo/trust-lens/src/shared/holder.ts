@@ -11,7 +11,7 @@
  * the credential's `resource_did` against the catalog's trustManifest identity.
  */
 
-import { Agent, ConsoleLogger, DidKey, DidsModule, Kms, LogLevel } from '@credo-ts/core'
+import { Agent, ConsoleLogger, DidKey, DidsModule, Kms, LogLevel, SdJwtVcRecord } from '@credo-ts/core'
 import { agentDependencies } from '@credo-ts/node'
 import { AskarModule } from '@credo-ts/askar'
 import { HederaDidResolver, HederaModule } from '@credo-ts/hedera'
@@ -56,8 +56,8 @@ export function createHolderAgent(label = 'trust-lens-seed-holder'): HolderAgent
 
 /**
  * Claim a credential offer (pre-authorized code flow) and return the compact credential.
- * The offer URI must be reachable from this process — see infra/docker-compose.dev.yml for the
- * loopback bridge used when the Identity Service runs on the host.
+ * The offer URI must be reachable from this process — see docs/OPERATIONS.md for the loopback
+ * bridge used when this runs in a container and the Identity Service on the host.
  */
 export async function claimCredentialOffer(agent: HolderAgent, credentialOffer: string): Promise<string> {
   const resolved = await agent.openid4vc.holder.resolveCredentialOffer(credentialOffer)
@@ -68,7 +68,11 @@ export async function claimCredentialOffer(agent: HolderAgent, credentialOffer: 
     ...accessToken,
     credentialConfigurationIds: resolved.credentialOfferPayload.credential_configuration_ids,
     verifyCredentialStatus: false,
-    credentialBindingResolver: async ({ proofTypes }: { proofTypes: { jwt?: { supportedSignatureAlgorithms: string[] } } }) => {
+    credentialBindingResolver: async ({
+      proofTypes,
+    }: {
+      proofTypes: { jwt?: { supportedSignatureAlgorithms: string[] } }
+    }) => {
       // A hosted attestation has no real holder; bind to a throwaway did:key so the
       // issuer's proof-of-possession requirement is satisfied.
       if (!proofTypes.jwt) throw new Error('issuer requires a proof type this holder does not support')
@@ -100,7 +104,6 @@ export async function claimCredentialOffer(agent: HolderAgent, credentialOffer: 
  * selection finds nothing.
  */
 export async function storeCredential(agent: HolderAgent, compactSdJwtVc: string): Promise<void> {
-  const { SdJwtVcRecord } = await import('@credo-ts/core')
   const record = new SdJwtVcRecord({ credentialInstances: [{ compactSdJwtVc }] } as never)
   await agent.sdJwtVc.store({ record } as never)
 }

@@ -85,7 +85,9 @@ export function deniedResult(
   result.vpToken = presented.vpToken
   result.verifiedAt = presented.verifiedAt
   if (refusal === 'revoked' && presented.credentialStatus) {
-    result.status = { ...presented.credentialStatus, revoked: true, checkedAt: new Date().toISOString() }
+    // The pointer only: the claim is issuer-controlled and travels to the client and the audit.
+    const { statusListCredential, statusListIndex } = presented.credentialStatus
+    result.status = { statusListCredential, statusListIndex, revoked: true, checkedAt: new Date().toISOString() }
   }
   return result
 }

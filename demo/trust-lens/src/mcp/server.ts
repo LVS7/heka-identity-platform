@@ -6,6 +6,7 @@
 import * as dotenv from 'dotenv'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 
+import { listenOrExit } from '../shared/listen'
 import { AccessToken, createResourceServer, resourceIdentifier } from './resource-server'
 
 dotenv.config()
@@ -26,7 +27,7 @@ async function verifyToken(jwt: string): Promise<AccessToken> {
   return payload as AccessToken
 }
 
-createResourceServer({ publicUrl: PUBLIC_URL, asUrl: AS_URL, verifyToken }).listen(PORT, () => {
+listenOrExit(createResourceServer({ publicUrl: PUBLIC_URL, asUrl: AS_URL, verifyToken }), PORT, 'mcp', () => {
   console.log(`[mcp] Acme Invoice Data on ${resourceIdentifier(PUBLIC_URL)} (Streamable HTTP)`)
   console.log(`[mcp] protected resource metadata: ${PUBLIC_URL}/.well-known/oauth-protected-resource`)
   console.log(`[mcp] authorization server: ${AS_URL}`)

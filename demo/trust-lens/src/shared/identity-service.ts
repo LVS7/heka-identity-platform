@@ -3,7 +3,7 @@
  *
  * Only the endpoints this demo needs. All shapes below were verified against a running
  * instance (see spec/ADR-001) — notably that credential payloads are arbitrary objects,
- * which is what lets us carry our own `credentialStatus` claim (design decision D7).
+ * which is what lets us carry our own `credentialStatus` claim (spec/ADR-001).
  */
 
 import axios, { AxiosInstance } from 'axios'
@@ -12,7 +12,6 @@ import { BitstringStatusListCredential } from '../core/status-list'
 
 export interface DidDocument {
   id: string
-  verificationMethod?: Array<{ id: string; type: string; publicKeyMultibase?: string }>
   [key: string]: unknown
 }
 
@@ -39,7 +38,6 @@ export interface VerificationSessionResponse {
   verificationSession: { id: string; state: string; [key: string]: unknown }
   /** e.g. openid4vp://?client_id=...&request_uri=... */
   authorizationRequest: string
-  authorizationRequestObject?: unknown
 }
 
 export interface VerificationSessionRecord {
@@ -53,6 +51,11 @@ export interface VerificationSessionRecord {
   }
 }
 
+/** Interactive calls (sessions, offers, status lists) must fail fast: a poll every 2 s depends on them. */
+const INTERACTIVE_TIMEOUT_MS = 15_000
+/** Ledger writes really are slow: a did:hedera is anchored on testnet. */
+const LEDGER = { timeout: 120_000 }
+
 export class IdentityServiceClient {
   private readonly api: AxiosInstance
 
@@ -63,7 +66,7 @@ export class IdentityServiceClient {
     this.api = axios.create({
       baseURL: baseUrl,
       headers: { Authorization: `Bearer ${accessToken}` },
-      timeout: 120_000,
+      timeout: INTERACTIVE_TIMEOUT_MS,
     })
   }
 
@@ -71,26 +74,21 @@ export class IdentityServiceClient {
 
   /** Create a public DID. `hedera` anchors it on the Hedera network (see docs/hedera.md). */
   public async createDid(method: 'hedera' | 'key' | 'indy'): Promise<DidDocument> {
-    const { data } = await this.api.post<DidDocument>('/dids', { method })
+    const { data } = await this.api.post<DidDocument>('/dids', { method }, LEDGER)
     return data
   }
 
   /** Provisions public DIDs for all enabled methods plus issuer/verifier records. Returns a did:key. */
   public async prepareWallet(): Promise<string> {
-    const { data } = await this.api.post<{ did: string }>('/prepare-wallet')
+    const { data } = await this.api.post<{ did: string }>('/prepare-wallet', undefined, LEDGER)
     return data.did
   }
 
   // ---------- OID4VC issuance ----------
 
   public async createIssuer(publicIssuerId: string, credentialsSupported: SdJwtCredentialConfig[]) {
-    const { data } = await this.api.post('/openid4vc/issuer', { publicIssuerId, credentialsSupported })
+    const { data } = await this.api.post('/openid4vc/issuer', { publicIssuerId, credentialsSupported }, LEDGER)
     return data as { id: string; publicIssuerId: string }
-  }
-
-  public async findIssuer(publicIssuerId: string) {
-    const { data } = await this.api.get('/openid4vc/issuer', { params: { publicIssuerId } })
-    return data as { id: string; publicIssuerId: string } | null
   }
 
   public async createIssuanceOffer(
@@ -110,8 +108,6 @@ export class IdentityServiceClient {
     publicVerifierId: string
     requestSigner: { method: 'did'; did: string }
     presentationExchange?: { definition: unknown }
-    dcql?: unknown
-    responseMode?: string
   }): Promise<VerificationSessionResponse> {
     const { data } = await this.api.post<VerificationSessionResponse>('/openid4vc/verification-session/request', body)
     return data
@@ -132,10 +128,10 @@ export class IdentityServiceClient {
     return new URL(this.baseUrl).origin
   }
 
-  // ---------- Bitstring status lists (revocation, D7) ----------
+  // ---------- Bitstring status lists (revocation, spec/ADR-001) ----------
 
   public async createStatusList(issuer: string, size = 1000, purpose = 'revocation'): Promise<string> {
-    const { data } = await this.api.post<{ id: string }>('/status-lists', { issuer, size, purpose })
+    const { data } = await this.api.post<{ id: string }>('/status-lists', { issuer, size, purpose }, LEDGER)
     return data.id
   }
 

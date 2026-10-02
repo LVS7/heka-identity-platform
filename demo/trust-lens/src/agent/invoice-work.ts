@@ -41,25 +41,55 @@ export function llmEnabled(): boolean {
   return Boolean(key && !key.startsWith('your_'))
 }
 
-async function llmReport(prompt: string): Promise<string> {
-  const { genkit } = await import('genkit')
-  const { openAI } = await import('@genkit-ai/compat-oai/openai')
+/**
+ * OpenAI's SDK waits ten minutes (with retries) by default; the operator is watching a task that has
+ * already passed authorization, so after this the deterministic report is used instead.
+ */
+const LLM_TIMEOUT_MS = 15_000
 
-  const ai = genkit({ plugins: [openAI()], model: openAI.model(LLM_MODEL) })
+type Genkit = ReturnType<typeof import('genkit').genkit>
+let ai: Promise<Genkit> | undefined
 
-  const { text } = await ai.generate({
-    prompt: [
-      'You are a supplier invoice reconciliation agent for Acme Corp.',
-      'Summarise the prepared payment export in at most 8 short lines. Be factual and plain.',
-      '',
-      'Reconciled invoices:',
-      ...INVOICES.map((i) => `- ${i.invoice} ${i.supplier} ${i.amount} (${i.status})`),
-      '',
-      `Operator request: ${prompt}`,
-    ].join('\n'),
+/** One Genkit instance per process, built on first use; a failed build is retried next time. */
+function getAi(): Promise<Genkit> {
+  ai ??= (async () => {
+    const { genkit } = await import('genkit')
+    const { openAI } = await import('@genkit-ai/compat-oai/openai')
+    return genkit({ plugins: [openAI()], model: openAI.model(LLM_MODEL) })
+  })().catch((error: unknown) => {
+    ai = undefined
+    throw error
   })
+  return ai
+}
 
-  return text?.trim() || deterministicReport()
+async function llmReport(prompt: string): Promise<string> {
+  // The bound covers loading Genkit too, and the race is awaited inside the try: a timeout that
+  // fires after a failure elsewhere must not become an unhandled rejection that ends the process.
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${LLM_TIMEOUT_MS / 1000}s`)), LLM_TIMEOUT_MS)
+  })
+  const generate = getAi().then((ai) =>
+    ai.generate({
+      prompt: [
+        'You are a supplier invoice reconciliation agent for Acme Corp.',
+        'Summarise the prepared payment export in at most 8 short lines. Be factual and plain.',
+        '',
+        'Reconciled invoices:',
+        ...INVOICES.map((i) => `- ${i.invoice} ${i.supplier} ${i.amount} (${i.status})`),
+        '',
+        `Operator request: ${prompt}`,
+      ].join('\n'),
+    })
+  )
+
+  try {
+    const { text } = await Promise.race([generate, timeout])
+    return text?.trim() || deterministicReport()
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** `onFallback` is told why the LLM was not used at run time; a missing key is not a fallback, it is the default. */

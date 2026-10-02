@@ -31,7 +31,6 @@ import {
   DemoResource,
   OFFICER_CREDENTIAL,
   PRO_DOMAIN,
-  TRUSTCO,
   catalogUrl,
   cardUrl,
 } from './shared/demo-config'

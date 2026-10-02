@@ -10,6 +10,10 @@
  * what was verified without touching the verifier's session: fetching the `request_uri` from the
  * client would move Heka's session to `RequestUriRetrieved` and corrupt the very signal being
  * shown, so everything the client learns travels in-band from the relying party.
+ *
+ * The agent marks only `completed` and `failed` final, so `auth-required` reaches a client on a
+ * stream (or with `blocking: false` and `tasks/get`); a blocking `message/send` returns only once
+ * the task has ended, too late to present. The Trust Lens streams.
  */
 
 import { AgentExtension, ExtensionURI } from '@a2a-js/sdk'

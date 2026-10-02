@@ -32,7 +32,29 @@ references them.
 yarn seed --reset
 ```
 
-Anything already in a wallet is now stale — re-issue with a fresh offer.
+Anything already in a wallet is now stale — re-issue with a fresh offer. The running services
+need no restart: every relying party reads the seed state per decision, the simulated holder
+re-mints its credential when the seed changed, and the console reads the state per request.
+
+### `Authorization server unavailable — retrying` in the MCP panel
+
+The AS answered `503` (Heka unreachable) or did not answer at all. Nothing was decided: the
+step-up stays pending and the panel keeps polling; the audit has one
+`engagement_refused · UNAVAILABLE` for it. Check Heka's `/health` (must be `200`) and the AS
+(`.logs/as.log`).
+
+### Agent task fails at once with `ECONNREFUSED` (containers)
+
+The Trust Lens engages the agent at the URL in the published card it verified, and the seed
+wrote `localhost:10003` there. Re-seed with `ACME_AGENT_URL=http://trustlens-agent:10003/` (and
+`MCP_PUBLIC_URL=http://trustlens-mcp:4400`): `yarn seed --reset` in the seed container. The audit
+shows the failed engagement as `engagement_refused · UNAVAILABLE`.
+
+### `Could not read: …` on Discovery · `UNAVAILABLE` verdicts
+
+A publisher catalog could not be read — the sites process is down or not answering on 443.
+Verify returns `UNAVAILABLE` for its entries and Engage refuses with `503`; both are audited.
+Start `yarn sites` (see `run-demo`).
 
 ### `session expired` when presenting
 

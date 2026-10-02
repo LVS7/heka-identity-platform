@@ -7,7 +7,8 @@
  *
  * Everything here goes through the Identity Service's status-list API. Status is read live from
  * the published status list — the same document any relying party reads — and the console keeps
- * only an in-memory journal of what it did (revocations, restores, offers).
+ * only an in-memory journal of what it did (revocations, restores, offers). The seed state is read
+ * per request and never written here, so `yarn seed --reset` needs no restart of the console.
  *
  * It also does the one issuer-side act the scenario needs before it starts: handing the operator
  * their Finance Data Officer credential. The offer is pushed to the wallet over DIDComm (see
@@ -21,9 +22,10 @@ import express from 'express'
 
 import { AuditLog } from '../core/audit'
 import { isRevokedInStatusList } from '../core/status-list'
-import { loadState, saveState, SeedState } from '../seed/state'
+import { loadState, SeedState } from '../seed/state'
 import { DEMO_RESOURCES, OFFICER_CREDENTIAL, TRUSTCO } from '../shared/demo-config'
 import { identityServiceFromEnv, IdentityServiceClient } from '../shared/identity-service'
+import { listenOrExit } from '../shared/listen'
 import { createOfficerOffer } from '../shared/officer-offer'
 import { WALLET_LINK_FILE, WalletLink } from '../shared/wallet-link'
 import { credoWalletTransport } from '../shared/wallet-link-credo'
@@ -31,7 +33,6 @@ import { credoWalletTransport } from '../shared/wallet-link-credo'
 dotenv.config()
 
 const PORT = Number(process.env.TRUSTCO_CONSOLE_PORT ?? 4100)
-const DIDCOMM_PORT = Number(process.env.TRUSTCO_CONSOLE_DIDCOMM_PORT ?? 4110)
 
 type CredentialKey = 'officer' | 'acmeAgent' | 'acmeMcp' | 'pro'
 
@@ -83,8 +84,8 @@ async function readTiles(identityService: IdentityServiceClient, state: SeedStat
 }
 
 function main() {
-  const state = loadState()
-  if (!state.statusListId) throw new Error('no seed state — run `yarn seed` first')
+  const initial = loadState()
+  if (!initial.statusListId) throw new Error('no seed state — run `yarn seed` first')
 
   const identityService = identityServiceFromEnv()
   // The issuer's own journal. Revocations and offers are issuer acts, and an audience should be
@@ -95,7 +96,7 @@ function main() {
   const walletLink = new WalletLink({
     stateFile: WALLET_LINK_FILE,
     initialDid: process.env.HOLDER_PUBLIC_DID,
-    transport: () => credoWalletTransport({ label: 'trustco-console-wallet-link', inboundPort: DIDCOMM_PORT }),
+    transport: () => credoWalletTransport({ label: 'trustco-console-wallet-link' }),
   })
 
   const app = express()
@@ -105,6 +106,7 @@ function main() {
   app.use('/shared', express.static(resolve(process.cwd(), 'src/web/public')))
 
   app.get('/api/credentials', async (_req, res) => {
+    const state = loadState()
     try {
       res.json({
         issuer: { name: TRUSTCO.name, legalName: TRUSTCO.legalName, did: state.issuerDid },
@@ -129,8 +131,13 @@ function main() {
   })
 
   app.delete('/api/wallet/link', async (_req, res) => {
-    await walletLink.unlink()
-    res.json(walletLink.status)
+    try {
+      await walletLink.unlink()
+      res.json(walletLink.status)
+    } catch (error) {
+      // The link file could not be removed (EBUSY on Windows, say): say so rather than claim "not linked".
+      res.status(500).json({ error: (error as Error).message })
+    }
   })
 
   /**
@@ -140,29 +147,29 @@ function main() {
    */
   app.post('/api/credentials/officer/offer', async (_req, res) => {
     try {
-      const offer = await createOfficerOffer(identityService, state)
-      state.officerOffer = offer
-      saveState(state)
+      // From the state as it is now: an offer minted from a pre-reseed issuer would be refused by both paths.
+      const offer = await createOfficerOffer(identityService, loadState())
 
       if (!walletLink.status.linked) {
-        audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', { delivered: false, via: 'offer URI' })
+        audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', { handedOver: false, via: 'offer URI' })
         res.json({ offer, delivered: false, note: 'no wallet linked — scan or deep-link the offer instead' })
         return
       }
 
       try {
         await walletLink.send(offer)
-        console.log('[console] officer credential offer delivered to the operator’s wallet')
+        // Handed over, not delivered: Credo's HTTP sender does not check the mediator's answer.
+        console.log('[console] officer credential offer handed to the wallet’s mediator')
         audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', {
-          delivered: true,
-          via: 'DIDComm basic message',
+          handedOver: true,
+          via: 'DIDComm basic message, to the wallet’s mediator',
         })
         res.json({ offer, delivered: true })
       } catch (error) {
         const message = (error as Error).message
         // The offer exists either way; the journal should say it was minted and why it did not arrive.
         audit.record('issuance', OFFICER_CREDENTIAL.role, 'offer minted', {
-          delivered: false,
+          handedOver: false,
           via: 'DIDComm basic message',
           error: message,
         })
@@ -174,9 +181,12 @@ function main() {
   })
 
   app.post('/api/credentials/:key/status', async (req, res) => {
+    const state = loadState()
     const key = req.params.key as CredentialKey
-    const index = state.statusIndexes[key]
-    const revoked = Boolean(req.body?.revoked)
+    // Own keys only: "constructor" and friends resolve through the prototype and would reach Heka.
+    const index = Object.hasOwn(state.statusIndexes, key) ? state.statusIndexes[key] : undefined
+    // Strict: Boolean("false") is true, and a revoke is not something to infer from a string.
+    const revoked = req.body?.revoked === true
 
     if (index === undefined) {
       res.status(404).json({ error: `unknown credential "${key}"` })
@@ -203,9 +213,9 @@ function main() {
     res.json({ events: audit.list({ type: type as never }) })
   })
 
-  app.listen(PORT, () => {
+  listenOrExit(app, PORT, 'console', () => {
     console.log(`[console] TrustCo Console on http://localhost:${PORT}`)
-    console.log(`[console] issuer: ${state.issuerDid}`)
+    console.log(`[console] issuer: ${initial.issuerDid}`)
   })
 }
 

@@ -12,7 +12,8 @@
 
 import { decodeSdJwtPresentation, DecodedSdJwtPresentation, holderBindingOf } from '../core/sd-jwt'
 import { checkCredentialStatus } from '../core/status-list'
-import { CredentialStatusClaim } from '../core/types'
+import { CredentialStatusClaim, ROLE_CREDENTIAL_VCT } from '../core/types'
+import { OFFICER_CREDENTIAL } from './demo-config'
 import { VerificationSessionRecord } from './identity-service'
 
 export interface PresentedCredential {
@@ -61,6 +62,9 @@ export type RefusalReason =
   | 'revoked'
 
 export class PresentationRefused extends Error {
+  /** What was presented, when the refusal came after reading it — for the result the client is told. */
+  public presented?: PresentedCredential
+
   public constructor(
     public readonly reason: RefusalReason,
     message: string
@@ -187,5 +191,77 @@ export async function assertPresentedCredentialValid(
     statusListIndex: status.statusListIndex,
     revoked: false,
     checkedAt: new Date().toISOString(),
+  }
+}
+
+/** The officer credential, disclosing role and organisation only — what both relying parties ask for. */
+export function officerPresentationDefinition(purpose: string) {
+  return {
+    id: 'FinanceDataOfficer',
+    name: 'Finance Data Officer',
+    purpose,
+    input_descriptors: [
+      {
+        id: 'FinanceDataOfficer',
+        name: 'Finance Data Officer credential',
+        purpose: 'Confirms the human authorizing this step holds the finance data officer role',
+        constraints: {
+          limit_disclosure: 'required',
+          fields: [
+            { path: ['$.vct'], filter: { type: 'string', enum: [ROLE_CREDENTIAL_VCT] } },
+            { path: ['$.role'], filter: { type: 'string', enum: [OFFICER_CREDENTIAL.role] } },
+            { path: ['$.org'], filter: { type: 'string' } },
+          ],
+        },
+      },
+    ],
+  }
+}
+
+/**
+ * The relying party's decision on a presentation Heka verified: issuer, type, role and live status,
+ * judged on the presented token. One implementation for the agent and the AS, so the two paths
+ * cannot drift apart on what they accept. A refusal carries what was presented, when it was read.
+ */
+export async function evaluateOfficerPresentation(
+  session: VerificationSessionRecord,
+  deps: {
+    trustedIssuer: string | undefined
+    statusListOrigin: string
+    fetchFn?: typeof fetch
+    log: (line: string) => void
+  }
+): Promise<{ presented: PresentedCredential; status: StatusCheck }> {
+  if (!deps.trustedIssuer) {
+    throw new PresentationRefused('untrusted-issuer', 'no trusted issuer configured — run `yarn seed`')
+  }
+
+  let presented: PresentedCredential | undefined
+  try {
+    presented = readPresentedCredential(session)
+    const status = await assertPresentedCredentialValid(
+      presented,
+      {
+        trustedIssuers: [deps.trustedIssuer],
+        requiredVct: ROLE_CREDENTIAL_VCT,
+        statusListOrigin: deps.statusListOrigin,
+        credentialLabel: OFFICER_CREDENTIAL.role,
+        requiredClaims: { role: OFFICER_CREDENTIAL.role },
+      },
+      deps.fetchFn ?? fetch
+    )
+    deps.log(`status checked: index ${status.statusListIndex} on ${status.statusListCredential} -> live`)
+    return { presented, status }
+  } catch (error) {
+    if (!(error instanceof PresentationRefused)) throw error
+    const pointer = presented?.credentialStatus
+    if (error.reason === 'revoked' && pointer) {
+      deps.log(`status checked: index ${pointer.statusListIndex} on ${pointer.statusListCredential} -> revoked`)
+    }
+    if (error.reason === 'foreign-status-list' && pointer) {
+      deps.log(`status list origin ${statusListOriginOf(pointer) ?? '(not a URL)'} is not ${deps.statusListOrigin}`)
+    }
+    error.presented = presented
+    throw error
   }
 }

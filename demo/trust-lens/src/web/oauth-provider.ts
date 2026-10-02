@@ -40,6 +40,8 @@ export interface PendingAuthorization {
   source?: PresentationSource
   /** Last attempt to push the request to the operator's wallet, if any. */
   delivery?: DeliveryState
+  /** The outage during this step-up was audited once; a poll every 2 s must not repeat it. */
+  unavailableAudited?: boolean
 }
 
 /** Required by the AS and by OAuth, never followed: the AS answers JSON and we poll. */
@@ -65,7 +67,7 @@ export class TrustLensOAuthProvider implements OAuthClientProvider {
 
   public constructor(private readonly fetchFn: typeof fetch = fetch) {}
 
-  /** Pre-registered: the AS does not validate client ids and offers no dynamic registration. */
+  /** A fixed client id: the AS does not validate client ids and offers no dynamic registration. */
   public clientInformation(): OAuthClientInformationMixed {
     return { client_id: CLIENT_ID }
   }
@@ -111,7 +113,8 @@ export class TrustLensOAuthProvider implements OAuthClientProvider {
       return
     }
 
-    const response = await this.fetchFn(authorizationUrl.toString())
+    // Bounded: this runs inside a tool call, and a hung AS would hang the call and the chat behind it.
+    const response = await this.fetchFn(authorizationUrl.toString(), { signal: AbortSignal.timeout(10_000) })
     const body = (await response.json().catch(() => ({}))) as {
       requestId?: string
       authorizationRequest?: string

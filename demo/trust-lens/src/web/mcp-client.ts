@@ -50,9 +50,14 @@ export interface AuthorizationPoll {
 export interface AuthorizationDecision {
   at: string
   granted: boolean
+  /** Over without a decision — the AS lost the request or the code exchange failed; nobody refused. */
+  incomplete?: boolean
   reason?: string
   presentation?: PresentationView
 }
+
+/** A poll of the AS is bounded: a hung AS must not stall the 2 s poll loop behind it. */
+const POLL_TIMEOUT_MS = 10_000
 
 /** The AS refused: a revoked or untrusted credential arrives here, with what was refused when known. */
 export class AuthorizationDeniedError extends Error {
@@ -62,6 +67,22 @@ export class AuthorizationDeniedError extends Error {
   ) {
     super(message)
     this.name = 'AuthorizationDeniedError'
+  }
+}
+
+/** The AS could not answer (it or Heka is down, or slow). Nothing was decided; the step-up stays pending. */
+export class AuthorizationUnavailableError extends Error {
+  public constructor(message: string) {
+    super(message)
+    this.name = 'AuthorizationUnavailableError'
+  }
+}
+
+/** The AS no longer knows the request (it restarted, or the request expired). Nothing was decided; the step-up is over. */
+export class AuthorizationLostError extends Error {
+  public constructor(message: string) {
+    super(message)
+    this.name = 'AuthorizationLostError'
   }
 }
 
@@ -109,7 +130,6 @@ export class McpConnection {
 
   /** Connect (initialize) to the MCP endpoint. Anonymous: nothing before a scoped tools/call needs a token. */
   public async connect(url: string): Promise<void> {
-    await this.close()
     const observe: typeof fetch = async (input, init) => {
       const response = await this.fetchFn(input, init)
       if (response.status === 401 || response.status === 403) this.lastRefusal = response.status
@@ -117,10 +137,13 @@ export class McpConnection {
     }
     const transport = new StreamableHTTPClientTransport(new URL(url), { authProvider: this.provider, fetch: observe })
     const client = new Client({ name: 'trust-lens', version: '1.0.0' })
+    // Connect before letting go of the old client: a failed re-engage leaves the working one in place.
     await client.connect(transport)
+    const previous = this.client
     this.client = client
     this.transport = transport
     this.serverUrl = url
+    await previous?.close().catch(() => undefined)
   }
 
   public async close(): Promise<void> {
@@ -177,7 +200,8 @@ export class McpConnection {
    * Ask the AS whether the presentation has landed. `granted: false` while still waiting (with
    * the session's state); on a grant the code is exchanged through the SDK (`finishAuth`, with
    * the saved verifier) and the pending entry cleared; a refusal throws `AuthorizationDeniedError`
-   * (a revoked credential arrives here). Any outcome other than "still waiting" ends the step-up.
+   * (a revoked credential arrives here). A decision or a lost request ends the step-up; an AS that
+   * cannot answer right now (`AuthorizationUnavailableError`) does not.
    */
   public async pollAuthorization(): Promise<AuthorizationPoll> {
     const pending = this.provider.pending
@@ -186,13 +210,29 @@ export class McpConnection {
     try {
       return await this.poll(pending)
     } catch (error) {
+      if (error instanceof AuthorizationUnavailableError) throw error
       this.provider.clearPending()
+      if (!(error instanceof AuthorizationDeniedError)) {
+        this.lastDecision = {
+          at: new Date().toISOString(),
+          granted: false,
+          incomplete: true,
+          reason: (error as Error).message,
+        }
+      }
       throw error
     }
   }
 
   private async poll(pending: PendingAuthorization): Promise<AuthorizationPoll> {
-    const response = await this.fetchFn(`${pending.authorizeOrigin}/authorize/${pending.requestId}`)
+    let response: Response
+    try {
+      response = await this.fetchFn(`${pending.authorizeOrigin}/authorize/${pending.requestId}`, {
+        signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
+      })
+    } catch (error) {
+      throw new AuthorizationUnavailableError(`the authorization server did not answer: ${(error as Error).message}`)
+    }
     const body = (await response.json().catch(() => ({}))) as {
       status?: string
       code?: string
@@ -201,16 +241,28 @@ export class McpConnection {
       presentation?: InTaskOpenId4VpAuthorizationResult
     }
 
-    // A token that arrived with nothing pressed on this side was scanned from the QR.
-    const source = pending.source ?? 'qr'
-    const presentation = body.presentation && presentationFrom(body.presentation, source)
+    // A button pressed on this side names the source; otherwise a token means the QR was scanned, and
+    // a refusal without one had no presentation at all.
+    const presentation =
+      body.presentation &&
+      presentationFrom(body.presentation, pending.source ?? (body.presentation.vpToken ? 'qr' : 'unknown'))
 
+    // The AS answers 403 only for a decision about the presented credential.
     if (response.status === 403) {
       const reason = body.error_description ?? 'authorization denied'
       this.lastDecision = { at: new Date().toISOString(), granted: false, reason, presentation }
       throw new AuthorizationDeniedError(reason, presentation)
     }
-    if (!response.ok) throw new Error(body.error_description ?? `the authorization server answered ${response.status}`)
+    if (response.status === 404) {
+      throw new AuthorizationLostError(
+        body.error_description ?? 'the authorization server no longer knows this request'
+      )
+    }
+    if (!response.ok) {
+      throw new AuthorizationUnavailableError(
+        body.error_description ?? `the authorization server answered ${response.status}`
+      )
+    }
     if (body.status !== 'granted' || !body.code) {
       if (body.session) pending.session = body.session
       return { granted: false, session: pending.session }

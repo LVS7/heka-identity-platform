@@ -9,6 +9,7 @@ import { ROLE_CREDENTIAL_VCT } from '../../core/types'
 import { VerificationSessionRecord } from '../identity-service'
 import {
   assertPresentedCredentialValid,
+  evaluateOfficerPresentation,
   PresentationPolicy,
   PresentationRefused,
   readPresentedCredential,
@@ -225,6 +226,38 @@ describe('assertPresentedCredentialValid', () => {
     expect(error.reason).toBe('wrong-type')
     expect(error.message).toBe(`credential is not a ${ROLE_CREDENTIAL_VCT}`)
     expect(fetchFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('evaluateOfficerPresentation', () => {
+  const deps = (over: Partial<Parameters<typeof evaluateOfficerPresentation>[1]> = {}) => ({
+    trustedIssuer: TRUSTCO,
+    statusListOrigin: 'http://localhost:3000',
+    fetchFn: fetchStub(),
+    log: () => undefined,
+    ...over,
+  })
+
+  it('returns what was presented and the live status check', async () => {
+    const { presented, status } = await evaluateOfficerPresentation(session(), deps())
+    expect(presented.claims.role).toBe('Finance Data Officer')
+    expect(status).toMatchObject({ statusListIndex: 3, revoked: false })
+  })
+
+  it('refuses when no trusted issuer is configured, without reading the presentation', async () => {
+    const error = await refusal(evaluateOfficerPresentation(session(), deps({ trustedIssuer: undefined })))
+    expect(error.reason).toBe('untrusted-issuer')
+    expect(error.presented).toBeUndefined()
+  })
+
+  it('logs the status pointer a revoked credential was judged on, and attaches what was presented', async () => {
+    const lines: string[] = []
+    const error = await refusal(
+      evaluateOfficerPresentation(session(), deps({ fetchFn: fetchStub(3), log: (line) => lines.push(line) }))
+    )
+    expect(error.reason).toBe('revoked')
+    expect(error.presented?.issuer).toBe(TRUSTCO)
+    expect(lines.join(' ')).toMatch(/index 3 on .* -> revoked/)
   })
 })
 

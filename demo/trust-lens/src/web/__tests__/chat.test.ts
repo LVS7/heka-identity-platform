@@ -147,8 +147,10 @@ describe('ChatSession', () => {
       summary: 'authorization required',
       requiredScope: 'suppliers:export',
     })
+    // A challenge, not a refusal.
     expect(audit.list()[0]).toMatchObject({
-      type: 'denial',
+      type: 'authorization',
+      outcome: 'step-up required (unauthorized)',
       evidence: { via: 'LLM chat', requiredScope: 'suppliers:export' },
     })
     expect(calls).toHaveLength(1)
@@ -198,10 +200,30 @@ describe('ChatSession', () => {
       content: [{ toolResponse: { ref: 'r1', output: { error: expect.stringContaining('revoked') } } }],
     })
     expect(chat.view.steps[2].text).toContain('cannot export')
-    expect(audit.list()[0]).toMatchObject({
-      type: 'denial',
-      subject: 'MCP · suppliers-export-bank-details',
-      evidence: { via: 'LLM chat' },
+    // The route that decided the step-up audits the denial with its presentation; the chat does not repeat it.
+    expect(audit.list().map((event) => event.outcome)).not.toContain(
+      'the Finance Data Officer credential has been revoked by its issuer'
+    )
+  })
+
+  it('tells the model an authorization that did not complete, not a denial', async () => {
+    const { chat, tools, calls } = session([request('suppliers-export-bank-details'), answer('Try again later.')], {
+      'suppliers-export-bank-details': [challenge],
+    })
+    chat.send('Export the bank details')
+    await chat.running
+
+    tools.lastDecision = { at: 'now', granted: false, incomplete: true, reason: 'unknown authorization request' }
+    chat.resume()
+    await chat.running
+
+    expect(chat.view.steps[1].tool).toMatchObject({
+      status: 'error',
+      summary: 'authorization did not complete: unknown authorization request',
+    })
+    expect(calls[1].messages.at(-1)).toMatchObject({
+      role: 'tool',
+      content: [{ toolResponse: { output: { error: expect.stringContaining('did not complete') } } }],
     })
   })
 
@@ -246,6 +268,47 @@ describe('ChatSession', () => {
     await chat.running
 
     expect(chat.view).toMatchObject({ state: 'error', error: 'too many tool turns' })
+  })
+
+  it('keeps the history valid after a tool call fails mid-turn, so the next message works', async () => {
+    // invoices-list has no scripted outcome: FakeTools throws, as a dropped MCP connection does.
+    const { chat, calls } = session([request('invoices-list'), answer('RCH-5540 is held.')])
+
+    chat.send('Which invoices are held?')
+    await chat.running
+    expect(chat.state).toBe('error')
+    expect(chat.view.steps[1].tool).toMatchObject({ status: 'error', summary: 'no scripted outcome for invoices-list' })
+
+    chat.send('Which invoices are held?')
+    await chat.running
+    expect(chat.state).toBe('idle')
+
+    // OpenAI answers 400 to a model turn whose tool calls were never answered.
+    const history = calls[1].messages
+    const dangling = history.findIndex(
+      (message, i) =>
+        message.role === 'model' &&
+        message.content.some((part) => 'toolRequest' in part) &&
+        history[i + 1]?.role !== 'tool'
+    )
+    expect(dangling).toBe(-1)
+  })
+
+  it('rolls back the turn that hit the tool-turn limit', async () => {
+    const turns = Array.from({ length: MAX_TOOL_TURNS + 1 }, (_, i) => request('invoices-list', `r${i}`))
+    const outcomes = Array.from({ length: MAX_TOOL_TURNS }, () => ok(ROWS))
+    const { chat, calls } = session([...turns, answer('Done.')], { 'invoices-list': outcomes })
+
+    chat.send('Loop forever')
+    await chat.running
+    expect(chat.state).toBe('error')
+
+    chat.send('Stop and answer')
+    await chat.running
+    expect(chat.state).toBe('idle')
+    const history = calls.at(-1)!.messages
+    expect(history.at(-1)).toMatchObject({ role: 'user', content: [{ text: 'Stop and answer' }] })
+    expect(history.at(-2)?.role).not.toBe('model')
   })
 
   it('rejects a message while busy or paused, and New chat clears everything', async () => {

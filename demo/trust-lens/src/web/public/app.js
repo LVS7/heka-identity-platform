@@ -6,6 +6,8 @@ const state = {
   wallet: { linked: false },
   config: { trustedIssuers: [], trustedIssuerName: '' },
   taskId: null,
+  /** The task as last rendered, so a poll that brings nothing new does not rewrite the view. */
+  renderedTask: '',
   query: '',
 }
 
@@ -14,27 +16,68 @@ const { el, escapeHtml } = ui
 const VERDICT_CLASS = { VERIFIED: 'ok' }
 const badgeClass = (verdict) => VERDICT_CLASS[verdict] ?? (verdict ? 'bad' : '')
 const isAgent = (result) => result.type.includes('a2a')
-const FINAL_STATES = ['authorized', 'denied', 'expired']
+/** An identifier is the publisher's own claim, so a verdict is kept per publisher and identifier. */
+const keyOf = (result) => `${result.publisher}|${result.identifier}`
+const FINAL_STATES = ['authorized', 'denied', 'expired', 'failed']
 const shorten = (value, head = 24, tail = 6) =>
   value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value
 const mmss = (seconds) =>
   `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 
+const API_TIMEOUT_MS = 20_000
+/** A first DIDComm send, wallet link or simulated presentation starts a Credo agent: seconds, more in Docker. */
+const SLOW_TIMEOUT_MS = 120_000
+
+/**
+ * Every request goes through here. Bounded, tolerant of an HTML error page, and never throwing: it
+ * answers like a Response whose json() always resolves, so a click whose request failed can say so
+ * instead of dying in an unhandled rejection.
+ */
+async function api(url, init = {}) {
+  const { timeoutMs = API_TIMEOUT_MS, ...options } = init
+  let response
+  try {
+    response = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (error) {
+    const data = { error: `request failed: ${error.message}` }
+    return { ok: false, status: 0, json: async () => data }
+  }
+  const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
+  return { ok: response.ok, status: response.status, json: async () => data }
+}
+
+/** One line under the header for a request that failed; an empty message clears it. */
+function showError(message) {
+  el('page-error').textContent = message ?? ''
+  el('page-error').hidden = !message
+}
+
 async function loadConfig() {
-  const response = await fetch('/api/config')
+  const response = await api('/api/config')
   if (response.ok) state.config = await response.json()
 }
 
 // ---------- polling that survives navigation ----------
 
-// A tab switch used to clear every interval, which killed a pending task the moment you looked
-// away. A poller now runs until its own work is final, whatever view is visible.
+// Task and step-up pollers outlive view switches — a pending task must not die because someone
+// looked at another tab; the list and chat pollers are view-scoped.
 const pollers = new Map()
 
 function startPoller(key, tick, ms) {
   stopPoller(key)
-  pollers.set(key, setInterval(tick, ms))
-  tick()
+  let running = false
+  const guarded = async () => {
+    // A slow answer must not overlap the next tick: two polls of one step-up could both settle it.
+    if (running) return
+    running = true
+    try {
+      await tick()
+    } finally {
+      running = false
+    }
+  }
+  pollers.set(key, setInterval(guarded, ms))
+  guarded()
 }
 
 function stopPoller(key) {
@@ -45,7 +88,7 @@ function stopPoller(key) {
 // ---------- operator's wallet ----------
 
 async function loadWallet() {
-  const response = await fetch('/api/wallet')
+  const response = await api('/api/wallet')
   state.wallet = response.ok ? await response.json() : { linked: false }
   renderWallet()
 }
@@ -64,10 +107,12 @@ async function linkWallet() {
   const holderDid = el('wallet-did').value.trim()
   el('wallet-error').textContent = ''
   el('wallet-link').disabled = true
+  el('wallet-did').disabled = true
   el('wallet-link').textContent = 'Linking…'
 
   try {
-    const response = await fetch('/api/wallet/link', {
+    const response = await api('/api/wallet/link', {
+      timeoutMs: SLOW_TIMEOUT_MS,
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ holderDid }),
@@ -81,13 +126,20 @@ async function linkWallet() {
     renderWallet()
   } finally {
     el('wallet-link').disabled = false
+    el('wallet-did').disabled = false
     el('wallet-link').textContent = 'Link wallet'
   }
 }
 
 async function unlinkWallet() {
-  const response = await fetch('/api/wallet/link', { method: 'DELETE' })
-  state.wallet = response.ok ? await response.json() : { linked: false }
+  const response = await api('/api/wallet/link', { method: 'DELETE' })
+  const data = await response.json()
+  if (!response.ok) {
+    showError(`Unlink failed: ${data.error}`)
+    return
+  }
+  showError('')
+  state.wallet = data
   renderWallet()
 }
 
@@ -99,13 +151,21 @@ async function search(query) {
   // The query is part of the Discovery address, so a search is a step in the history too.
   if (el('discovery').classList.contains('active')) syncUrl('discovery')
 
-  const response = await fetch(`/api/discovery?q=${encodeURIComponent(query)}`)
+  const response = await api(`/api/discovery?q=${encodeURIComponent(query)}`)
   const data = await response.json()
+  showError(response.ok ? '' : `Discovery failed: ${data.error}`)
 
   state.results = data.results ?? []
   state.verdicts.clear()
 
-  el('score-note').textContent = state.results.length ? `Score: ${data.scoreMeaning}` : ''
+  // A publisher that could not be read is said out loud: "nothing matches" would be a different claim.
+  const unreachable = data.unreachable ?? []
+  el('score-note').textContent = [
+    state.results.length ? `Score: ${data.scoreMeaning}` : '',
+    unreachable.length ? `Could not read: ${unreachable.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
   el('empty').textContent = query.trim()
     ? `No published resource matches “${query.trim()}”.`
     : 'Search the registry to discover published resources.'
@@ -119,7 +179,7 @@ function render() {
 
   container.innerHTML = state.results
     .map((result) => {
-      const verdict = state.verdicts.get(result.identifier)
+      const verdict = state.verdicts.get(keyOf(result))
       const badge = verdict
         ? `<span class="badge ${badgeClass(verdict.verdict)}">${escapeHtml(verdict.verdict)}</span>`
         : `<span class="badge">Not verified</span>`
@@ -127,8 +187,8 @@ function render() {
       const engageable = verdict?.engageable
       const actions = verdict
         ? `<div class="actions">
-             <button data-details="${escapeHtml(result.identifier)}">Evidence</button>
-             <button data-engage="${escapeHtml(result.identifier)}" ${engageable ? '' : 'disabled'}>Engage</button>
+             <button data-details="${escapeHtml(keyOf(result))}">Evidence</button>
+             <button data-engage="${escapeHtml(keyOf(result))}" ${engageable ? '' : 'disabled'}>Engage</button>
            </div>
            ${engageable ? '' : '<span class="refusal">refused: not verified</span>'}`
         : ''
@@ -162,13 +222,22 @@ async function verifyAll() {
   button.textContent = 'Verifying…'
 
   try {
-    const response = await fetch('/api/verify', {
+    const response = await api('/api/verify', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ identifiers: state.results.map((r) => r.identifier) }),
+      body: JSON.stringify({
+        targets: state.results.map((r) => ({ identifier: r.identifier, publisher: r.publisher })),
+      }),
     })
-    const data = await response.json()
-    for (const result of data.results ?? []) state.verdicts.set(result.identifier, result)
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      showError(`Verify failed: ${data.error ?? `HTTP ${response.status}`}`)
+      return
+    }
+    showError('')
+    // A verdict from an earlier pass must not outlive a pass that could not reach its publisher.
+    state.verdicts.clear()
+    for (const result of data.results ?? []) state.verdicts.set(keyOf(result), result)
     render()
   } finally {
     button.textContent = 'Verify all'
@@ -207,9 +276,9 @@ function checkState(key, evidence, verdict) {
   }
 }
 
-function openDrawer(identifier) {
-  const result = state.results.find((r) => r.identifier === identifier)
-  const verdict = state.verdicts.get(identifier)
+function openDrawer(key) {
+  const result = state.results.find((r) => keyOf(r) === key)
+  const verdict = state.verdicts.get(key)
   if (!result || !verdict) return
 
   const evidence = verdict.evidence ?? {}
@@ -382,11 +451,13 @@ function openRawVp(presentation) {
 
 // `panel` is 'task' or 'mcp'; element ids are `${panel}-send`, `${panel}-qr`, and so on.
 const auth = {
-  task: { request: null, delivery: null, authorization: null },
-  mcp: { request: null, delivery: null, authorization: null },
+  task: { request: null, delivery: null, authorization: null, sending: false },
+  mcp: { request: null, delivery: null, authorization: null, sending: false },
 }
 
 const STEPS = ['Requested', 'Wallet fetched', 'Verified', 'Status checked', 'Authorized']
+/** How the last step reads when the exchange ended without an authorization. */
+const FAILED_LABEL = { denied: 'Denied', expired: 'Expired', failed: 'Failed' }
 
 /** How many steps are done. A denial after a status check has walked the whole strip. */
 function stepProgress(authorization, presentation) {
@@ -405,19 +476,21 @@ function stepProgress(authorization, presentation) {
 }
 
 function renderSteps(panel, authorization, presentation) {
-  const failed = authorization.state === 'denied' || authorization.state === 'expired'
+  const failed = ['denied', 'expired', 'failed'].includes(authorization.state)
   const progress = stepProgress(authorization, presentation)
   el(`${panel}-steps`).innerHTML = STEPS.map((label, index) => {
     if (index === STEPS.length - 1 && failed) {
-      return `<li class="bad">${authorization.state === 'expired' ? 'Expired' : 'Denied'}</li>`
+      return `<li class="bad">${FAILED_LABEL[authorization.state]}</li>`
     }
     const cls = index < progress ? 'done' : index === progress && !failed ? 'current' : ''
     return `<li class="${cls}">${escapeHtml(label)}</li>`
   }).join('')
 }
 
+/** Only the A2A panel counts down: the agent has a deadline, the MCP step-up has none. */
 function renderCountdown(panel, authorization) {
   const target = el(`${panel}-countdown`)
+  if (!target) return
   if (!authorization?.expiresAt || FINAL_STATES.includes(authorization.state)) {
     target.textContent = ''
     target.className = 'countdown'
@@ -452,9 +525,10 @@ function renderSendButton(panel) {
   const button = el(`${panel}-send`)
   if (!button) return
   const { linked } = state.wallet
-  const { delivery } = auth[panel]
-  button.disabled = !linked
-  button.textContent = delivery ? 'Resend to wallet' : 'Send to wallet'
+  const { delivery, sending } = auth[panel]
+  // The panel re-renders on every poll; a send still in flight must stay visibly in flight.
+  button.disabled = !linked || sending
+  button.textContent = sending ? 'Sending…' : delivery ? 'Resend to wallet' : 'Send to wallet'
   button.title = linked ? '' : 'Link the wallet first — paste its Public DID in the header'
 }
 
@@ -495,29 +569,31 @@ function showAuthPanel(panel, authorization, presentation) {
   // Once decided there is nothing left to present; the strip and what was asked stay as the record.
   el(`${panel}-ways`).hidden = settled
   el(`${panel}-auth`).classList.toggle('settled', settled)
-  el(`${panel}-auth`).classList.toggle('refused', authorization.state === 'denied' || authorization.state === 'expired')
+  el(`${panel}-auth`).classList.toggle('refused', ['denied', 'expired', 'failed'].includes(authorization.state))
   renderSendButton(panel)
   renderDelivery(panel)
   el(`${panel}-auth`).hidden = false
 }
 
 function hideAuthPanel(panel) {
-  auth[panel] = { request: null, delivery: null, authorization: null }
+  auth[panel] = { request: null, delivery: null, authorization: null, sending: false }
   el(`${panel}-auth`).hidden = true
+  const outage = el(`${panel}-auth-unavailable`)
+  if (outage) outage.textContent = ''
 }
 
 async function sendToWallet(panel) {
-  const button = el(`${panel}-send`)
-  button.disabled = true
-  button.textContent = 'Sending…'
+  auth[panel].sending = true
+  renderSendButton(panel)
 
   try {
     const url = panel === 'task' ? `/api/task/${state.taskId}/send-to-wallet` : '/api/mcp/send-to-wallet'
-    const response = await fetch(url, { method: 'POST' })
+    const response = await api(url, { method: 'POST', timeoutMs: SLOW_TIMEOUT_MS })
     const data = await response.json()
     auth[panel].delivery = data.delivery ?? { state: 'failed', at: new Date().toISOString(), error: data.error }
     renderDelivery(panel)
   } finally {
+    auth[panel].sending = false
     renderSendButton(panel)
   }
 }
@@ -527,7 +603,7 @@ async function sendToWallet(panel) {
 const TASK_BADGE = { completed: 'ok', failed: 'bad', 'auth-required': 'warn' }
 
 async function loadTasks() {
-  const response = await fetch('/api/tasks')
+  const response = await api('/api/tasks')
   if (!response.ok) return
   const data = await response.json()
   const tasks = data.tasks ?? []
@@ -564,28 +640,47 @@ async function loadTasks() {
 
 // ---------- agent task ----------
 
-async function engage(identifier) {
-  const result = state.results.find((r) => r.identifier === identifier)
+/**
+ * Engage a discovered resource — or, with `again`, the entry an earlier task came from, in that
+ * task's context. The server re-verifies either way; the verdict this page holds is display only.
+ */
+async function engage(key, again, button) {
+  const result = again ?? state.results.find((r) => keyOf(r) === key)
+  if (!result) return
 
-  // The server re-verifies before engaging; the verdict this page holds is display only.
-  const response = await fetch('/api/engage', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier }),
-  })
+  // Re-verification takes seconds; a second click would start a second task.
+  const label = button?.textContent
+  if (button) {
+    button.disabled = true
+    button.textContent = 'Engaging…'
+  }
+  let response
+  try {
+    response = await api('/api/engage', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier: result.identifier, publisher: result.publisher, contextId: again?.contextId }),
+    })
+  } finally {
+    if (button) {
+      button.disabled = false
+      button.textContent = label
+    }
+  }
   const data = await response.json()
 
   if (!response.ok) {
-    alert(data.verdict ? `refused: ${data.verdict} at engagement time` : data.error)
+    showError(data.verdict ? `Engage refused: ${data.verdict} at engagement time — ${data.error}` : data.error)
     return
   }
+  showError('')
 
   // An MCP server is not engaged with a task: its tools are on the MCP tab. Going there is the
   // engagement, and the fresh verdict travels along so the tab can say what was verified.
   if (data.kind === 'mcp') {
     el('mcp-engaged').hidden = false
     el('mcp-engaged').textContent =
-      `${result?.displayName ?? identifier} — re-verified ${ui.formatWhen(data.verifiedAt)} · VERIFIED (${result?.publisher ?? ''}). Verified is not the same as unlocked: the sensitive tool below still demands a scope, and every call re-verifies the server.`
+      `${result.displayName} — re-verified ${ui.formatWhen(data.verifiedAt)} · VERIFIED (${result.publisher}). Verified is not the same as unlocked: the sensitive tool below still demands a scope, and every call re-verifies the server.`
     renderConnection(data.connected)
     showView('mcp')
     return
@@ -598,10 +693,27 @@ const AUTH_TITLE = {
   authorized: 'Authorized',
   denied: 'Authorization denied',
   expired: 'Authorization expired',
+  failed: 'Authorization did not complete',
 }
 
 function renderTask(task) {
   el('task-title').textContent = task.resource
+
+  // The agent remembers a context it authorized: running again there completes without asking —
+  // until Forget authorizations on the agent's page, which makes it ask again.
+  const again = el('task-again')
+  again.hidden = !(task.state === 'completed' && task.a2a?.contextId)
+  again.onclick = () =>
+    engage(
+      null,
+      {
+        identifier: task.identifier,
+        publisher: task.publisher,
+        displayName: task.resource,
+        contextId: task.a2a?.contextId,
+      },
+      again
+    )
   el('task-context').textContent = task.preflight
     ? `Re-verified ${ui.formatWhen(task.preflight.verifiedAt)} · ${task.preflight.verdict} — asking it to reconcile May invoices and prepare the payment export`
     : ''
@@ -637,6 +749,7 @@ function renderTask(task) {
 /** Open a task and keep polling it until it is final — whatever view is visible meanwhile. */
 function watchTask(taskId) {
   state.taskId = taskId
+  state.renderedTask = ''
   el('task-title').textContent = ''
   el('task-context').textContent = ''
   el('task-events').innerHTML = ''
@@ -648,17 +761,24 @@ function watchTask(taskId) {
   startPoller(
     'task',
     async () => {
-      const response = await fetch(`/api/task/${taskId}`)
-      if (!response.ok) {
+      const response = await api(`/api/task/${taskId}`)
+      // A stale link (tasks live in memory, so a restart forgets them) lands on the list instead of
+      // an empty page. Replace rather than push: there is nothing to go back to.
+      if (response.status === 404) {
         stopPoller('task')
-        // A stale link (tasks live in memory, so a restart forgets them) lands on the list instead
-        // of an empty page. Replace rather than push: there is nothing to go back to.
-        if (response.status === 404) showView('tasks', true)
+        showView('tasks', true)
         return
       }
+      // Anything else that failed is worth another try on the next tick.
+      if (!response.ok) return
       const task = await response.json()
       if (state.taskId !== taskId) return
-      renderTask(task)
+      // Rewriting the view on every 1.5 s tick would drop a text selection and replace the buttons.
+      const signature = JSON.stringify(task)
+      if (signature !== state.renderedTask) {
+        state.renderedTask = signature
+        renderTask(task)
+      }
       if (task.state === 'completed' || task.state === 'failed') stopPoller('task')
     },
     1500
@@ -671,7 +791,10 @@ async function simulatePresentation() {
   el('task-simulate-note').textContent = 'Presenting…'
 
   try {
-    const response = await fetch(`/api/task/${state.taskId}/simulate-presentation`, { method: 'POST' })
+    const response = await api(`/api/task/${state.taskId}/simulate-presentation`, {
+      method: 'POST',
+      timeoutMs: SLOW_TIMEOUT_MS,
+    })
     const data = await response.json()
     el('task-simulate-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
   } finally {
@@ -744,12 +867,6 @@ const mcp = { pending: null }
 const token = { expiresAt: 0 }
 const chat = { busy: false, rendered: '' }
 
-const SESSION_STATE = {
-  RequestCreated: 'requested',
-  RequestUriRetrieved: 'wallet-fetched',
-  ResponseVerified: 'verified',
-}
-
 function renderConnection(connected) {
   const line = el('mcp-connection')
   if (!connected) {
@@ -762,7 +879,7 @@ function renderConnection(connected) {
 }
 
 async function loadTools() {
-  const response = await fetch('/api/mcp/tools')
+  const response = await api('/api/mcp/tools')
   const data = await response.json()
 
   if (!response.ok) {
@@ -799,17 +916,6 @@ function renderTokenStatus(status) {
   el('token-drop').hidden = left <= 0
 }
 
-function mcpAuthorizationFrom(authorization) {
-  return {
-    request: authorization.request,
-    sessionId: authorization.session?.id,
-    state: SESSION_STATE[authorization.session?.state] ?? 'requested',
-    requested: authorization.requested,
-    delivery: authorization.delivery,
-    source: authorization.source,
-  }
-}
-
 /** The auth panel sits inside the paused chat step, and goes home between step-ups. */
 function placeAuthPanel(slot) {
   const panel = el('mcp-auth')
@@ -826,8 +932,8 @@ function pollAuthorization() {
         stopPoller('mcp-auth')
         return
       }
-      const response = await fetch('/api/mcp/authorization')
-      const data = await response.json()
+      const response = await api('/api/mcp/authorization')
+      const data = await response.json().catch(() => ({}))
 
       // Nothing pending on the server (a restart, say): there is nothing to wait for.
       if (response.status === 409) {
@@ -837,26 +943,27 @@ function pollAuthorization() {
         return
       }
 
-      // Decided either way: the paused step shows the outcome (retried with the presentation card,
-      // or denied). The server resumes the chat itself; the resume call here is belt and braces.
-      if (response.status === 403 || data.granted) {
+      // The AS or Heka is down, or this request failed: nothing was decided, so keep waiting and say why.
+      if (!response.ok && ![403, 409, 410].includes(response.status)) {
+        el('mcp-auth-unavailable').textContent = `Authorization server unavailable — retrying: ${data.error ?? ''}`
+        return
+      }
+      el('mcp-auth-unavailable').textContent = ''
+
+      // Over — granted, denied (403), or lost (410): the server has resumed the chat, and the paused
+      // step shows the outcome (retried with the presentation card, or denied).
+      if (data.granted || response.status === 403 || response.status === 410) {
         stopPoller('mcp-auth')
         mcp.pending = null
         if (data.granted) renderTokenStatus(data.token)
         hideAuthPanel('mcp')
-        await fetch('/api/chat/resume', { method: 'POST' })
         loadChat()
         return
       }
 
       // Keep the strip and the delivery line in step with what the server saw.
-      const authorization = mcp.pending.authorization
-      if (data.session) {
-        authorization.sessionId = data.session.id
-        authorization.state = SESSION_STATE[data.session.state] ?? authorization.state
-      }
-      if (data.delivery) authorization.delivery = data.delivery
-      showAuthPanel('mcp', authorization, null)
+      if (data.authorization) mcp.pending.authorization = data.authorization
+      showAuthPanel('mcp', mcp.pending.authorization, null)
     },
     2000
   )
@@ -868,7 +975,7 @@ async function simulateMcpPresentation() {
   el('mcp-simulate-note').textContent = 'Presenting…'
 
   try {
-    const response = await fetch('/api/mcp/simulate-presentation', { method: 'POST' })
+    const response = await api('/api/mcp/simulate-presentation', { method: 'POST', timeoutMs: SLOW_TIMEOUT_MS })
     const data = await response.json()
     el('mcp-simulate-note').textContent = response.ok ? 'Presented by the in-process holder.' : data.error
   } finally {
@@ -877,8 +984,12 @@ async function simulateMcpPresentation() {
 }
 
 async function dropToken() {
-  const response = await fetch('/api/mcp/token', { method: 'DELETE' })
+  const response = await api('/api/mcp/token', { method: 'DELETE' })
   const data = await response.json()
+  if (!response.ok) {
+    showError(`Drop token failed: ${data.error}`)
+    return
+  }
   renderTokenStatus(data.token)
   el('token-note').textContent =
     'Cached token dropped. The next sensitive call has to authorize again — against the credential as it stands now.'
@@ -926,7 +1037,7 @@ function renderChatStep(step) {
 }
 
 async function loadChat() {
-  const response = await fetch('/api/chat')
+  const response = await api('/api/chat')
   if (!response.ok) return
   const view = await response.json()
   renderChat(view)
@@ -966,7 +1077,7 @@ function renderChat(view) {
   if (paused && !mcp.pending?.chat) {
     el('mcp-auth-title').textContent = `Authorization required — ${view.authorization.scope}`
     el('mcp-auth-message').textContent = view.authorization.message ?? ''
-    mcp.pending = { chat: true, authorization: mcpAuthorizationFrom(view.authorization) }
+    mcp.pending = { chat: true, authorization: view.authorization }
     showAuthPanel('mcp', mcp.pending.authorization, null)
     pollAuthorization()
     // A new pause is brought into view even if the person had scrolled up: it waits for them.
@@ -979,7 +1090,7 @@ async function sendChat() {
   const input = el('chat-input')
   const message = input.value.trim()
   if (!message) return
-  const response = await fetch('/api/chat', {
+  const response = await api('/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ message }),
@@ -995,7 +1106,11 @@ async function sendChat() {
 }
 
 async function resetChat() {
-  await fetch('/api/chat/reset', { method: 'POST' })
+  const response = await api('/api/chat/reset', { method: 'POST' })
+  if (!response.ok) {
+    showError(`New chat failed: ${(await response.json()).error}`)
+    return
+  }
   if (mcp.pending?.chat) {
     stopPoller('mcp-auth')
     mcp.pending = null
@@ -1007,11 +1122,12 @@ async function resetChat() {
 // ---------- audit ----------
 
 async function loadAudit() {
-  const response = await fetch('/api/audit')
+  const response = await api('/api/audit')
   const data = await response.json()
+  if (!response.ok) showError(`Could not read the audit: ${data.error}`)
 
   // A refusal is as much a trust decision as an approval; colour by what happened, not by type.
-  const REFUSALS = ['denial', 'engagement_refused', 'revocation']
+  const REFUSALS = ['denial', 'engagement_refused']
   const tone = (event) => {
     if (REFUSALS.includes(event.type)) return 'bad'
     if (event.outcome === 'VERIFIED') return 'ok'
@@ -1054,7 +1170,7 @@ el('results').addEventListener('click', (event) => {
   if (details) return openDrawer(details.dataset.details)
 
   const engageTarget = event.target.closest('[data-engage]')
-  if (engageTarget && !engageTarget.disabled) engage(engageTarget.dataset.engage)
+  if (engageTarget && !engageTarget.disabled) engage(engageTarget.dataset.engage, undefined, engageTarget)
 })
 
 el('wallet-link').addEventListener('click', linkWallet)

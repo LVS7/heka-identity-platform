@@ -78,6 +78,8 @@ export class AgentState {
   public readonly authorizedContexts = new Set<string>()
   public channel: ChannelView = { state: 'connecting', since: new Date().toISOString(), reconnects: 0 }
   private opens = 0
+  /** True from a journaled close until the channel opens again: one record per outage, not per retry. */
+  private outage = false
 
   public constructor(journal = new AgentJournal()) {
     this.journal = journal
@@ -133,6 +135,16 @@ export class AgentState {
     const record = this.authorizations.get(sessionId)
     if (!record || record.sessionState === state) return
     record.sessionState = state
+    if (record.outcome) {
+      // Heka's session outlives the agent's deadline: a wallet can still present after the decision,
+      // and nothing judges that presentation any more.
+      this.journal.record({
+        type: 'session.state',
+        ...ids(record),
+        text: `session ${state} after the agent stopped waiting — ignored`,
+      })
+      return
+    }
     this.journal.record({ type: 'session.state', ...ids(record), text: `session ${state}` })
     if (state === 'ResponseVerified') {
       record.verifiedAt = new Date().toISOString()
@@ -199,6 +211,15 @@ export class AgentState {
     })
   }
 
+  /** `tasks/cancel` ends the wait; the record must not stay pending on the page forever. */
+  public cancelPendingAuthorization(taskId: string): void {
+    for (const record of this.authorizations.values()) {
+      if (record.taskId === taskId && !record.outcome) {
+        this.authorizationDecided({ sessionId: record.sessionId, outcome: 'denied', reason: 'task cancelled' })
+      }
+    }
+  }
+
   /** True once the record is settled; a pending one is still being waited on. */
   public isDecided(sessionId: string): boolean {
     return Boolean(this.authorizations.get(sessionId)?.outcome)
@@ -235,13 +256,17 @@ export class AgentState {
   public channelState(state: ChannelView['state'], detail?: string): void {
     const since = new Date().toISOString()
     if (state === 'open') {
+      this.outage = false
       this.opens++
       this.channel = { state, since, reconnects: this.opens - 1 }
       this.journal.record({ type: 'channel.open', text: 'notification channel open' })
       return
     }
     this.channel = { ...this.channel, state, since }
-    if (state === 'closed') {
+    // A Heka outage retries for as long as it lasts; journaling every failed attempt would push the
+    // task history out of the ring buffer the page exists to show.
+    if (state === 'closed' && !this.outage) {
+      this.outage = true
       this.journal.record({
         type: 'channel.closed',
         text: `notification channel closed${detail ? ` (${detail})` : ''}`,

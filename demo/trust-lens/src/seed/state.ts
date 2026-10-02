@@ -5,7 +5,7 @@
  * across restarts; `--reset` is what deliberately re-issues everything.
  */
 
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 export interface SeedState {
@@ -19,12 +19,16 @@ export interface SeedState {
   seededAt?: string
 }
 
-const STATE_PATH = resolve(process.cwd(), '.seed-state.json')
+/** Resolved per call, from the directory the process (or a test) runs in. */
+export function statePath(): string {
+  return resolve(process.cwd(), '.seed-state.json')
+}
 
 export function loadState(): SeedState {
-  if (!existsSync(STATE_PATH)) return { dids: {}, statusIndexes: {} }
+  const file = statePath()
+  if (!existsSync(file)) return { dids: {}, statusIndexes: {} }
   try {
-    const parsed = JSON.parse(readFileSync(STATE_PATH, 'utf8')) as Partial<SeedState>
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<SeedState>
     // Defaults after the spread, not before: a file missing `dids` would otherwise
     // spread `dids: undefined` over the default and every later lookup would throw.
     return { ...parsed, dids: parsed.dids ?? {}, statusIndexes: parsed.statusIndexes ?? {} }
@@ -33,14 +37,23 @@ export function loadState(): SeedState {
   }
 }
 
+/**
+ * Written to a temp file and renamed: the agent and the AS read this file on every decision, and a
+ * half-written file parses as "no issuer", which would turn a seed run into spurious denials.
+ */
 export function saveState(state: SeedState): void {
-  writeFileSync(STATE_PATH, `${JSON.stringify(state, null, 2)}\n`)
+  const file = statePath()
+  const temp = `${file}.tmp`
+  writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`)
+  renameSync(temp, file)
+}
+
+/** What a credential minted from this state depends on; a change means its issuer world is gone. */
+export function seedFingerprint(state: SeedState): string {
+  return [state.issuerDid, state.statusListId, state.statusIndexes.officer].join('|')
 }
 
 export function clearState(): void {
-  if (existsSync(STATE_PATH)) rmSync(STATE_PATH)
-}
-
-export function statePath(): string {
-  return STATE_PATH
+  const file = statePath()
+  if (existsSync(file)) rmSync(file)
 }

@@ -86,6 +86,11 @@ checking the credential's status.`; the task's `presentation` has `outcome: "aut
 ⚠️ Present promptly: the verification session expires after Credo's default window, and the agent
 gives up after 180s.
 
+**Run again in this context** (task view, on a completed task) engages the same entry with the
+task's `contextId` — `POST /api/engage` with `contextId`. The agent remembers the authorized
+context, so the new task completes with no `auth-required`; the audit says `task completed in a
+context authorized earlier`.
+
 ## 5. MCP — least privilege per call, in a chat
 
 Engage first — every MCP call is gated on a fresh verdict of the engaged entry:
@@ -160,6 +165,9 @@ curl -s -X POST http://localhost:4100/api/credentials/officer/status \
 
 - Engage the agent again → presentation still submits fine, then
   `Authorization denied: the Finance Data Officer credential has been revoked by its issuer`
+- **Run again in this context** on a task completed before the revocation → still completes: the
+  agent's memory of that context has no expiry (G5). Press **Forget authorizations** on
+  http://localhost:10003, then Run again → it asks, and the presentation is denied.
 - Ask for the sensitive tool again → **this still succeeds if a token was already minted.** That
   is correct OAuth: revoking a credential stops the _next_ grant, it does not reach back into a
   live token. Drop the cached token first, then the call fails and the AS refuses:

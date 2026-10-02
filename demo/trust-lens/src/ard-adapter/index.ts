@@ -16,9 +16,10 @@ import * as dotenv from 'dotenv'
 dotenv.config()
 
 async function main() {
-  // TODO(Phase 1.4): POST /api/federation/config/default/ai_catalog/sources for acme + pro,
-  // then POST /api/federation/ai_catalog/sync; `--status` reports per-source counts.
-  throw new Error('Not implemented yet — see plan Phase 1.4 and spec/ADR-002')
+  // Not built: the registry cannot run (spec/ADR-002). Once it does, this would POST
+  // /api/federation/config/default/ai_catalog/sources for acme + pro, then
+  // /api/federation/ai_catalog/sync, with `--status` reporting per-source counts.
+  throw new Error('Not implemented — registry ingestion is blocked upstream, see spec/ADR-002')
 }
 
 main().catch((e) => {

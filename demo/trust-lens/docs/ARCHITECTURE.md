@@ -117,7 +117,14 @@ the grant retries the same request. The AS's poll answers mirror the same demo a
 (`session` while pending, `presentation` on a grant or a denial). The Trust Lens folds both paths
 into one view (`src/web/presentation.ts`), decides the presentation's source (wallet, QR,
 simulated — the relying party cannot tell), and records the presentation with every completion,
-grant and denial in the audit.
+grant and denial in the audit. The AS answers `403` only for a decision about the presented
+credential; Heka being unreachable is `503`, and the step-up stays pending. In the audit an outage
+(publisher, AS, agent) is `engagement_refused · UNAVAILABLE` and a 401/403 challenge is
+`authorization · step-up required` — `denial` is kept for a refused credential.
+
+On the A2A side the Trust Lens builds its client from the card it has just verified, so the task
+goes to the URL in those bytes; a completed task can be continued in its context (**Run again in
+this context**), which the agent may have authorized already.
 
 The MCP server and client know nothing about verifiable credentials. That is the point: the
 composition needs no bespoke wire format, so an ordinary MCP client still works.

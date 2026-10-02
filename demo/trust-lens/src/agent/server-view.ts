@@ -3,8 +3,8 @@
  *
  * Mounted on the same `express()` as the protocol, and before it, so `GET /` is the page while
  * `POST /` stays JSON-RPC — `express.static` answers GET and HEAD only and hands anything else on.
- * One action exists, Forget authorizations, for the revocation demo on a reused context; the
- * holder's and the client's actions stay in the Trust Lens.
+ * One action exists, Forget authorizations, for the revocation demo on a context continued with
+ * Run again in this context; the holder's and the client's actions stay in the Trust Lens.
  */
 
 import { resolve } from 'node:path'
